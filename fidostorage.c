@@ -6,6 +6,7 @@
 #include "libc/random.h"
 #include "aes.h"
 #include "libsd.h"
+#include "libcryp.h"
 #include "api/libfidostorage.h"
 
 
@@ -122,7 +123,7 @@ mbed_error_t    fidostorage_get_appid_slot(uint8_t* appid, uint32_t *slot)
     sys_get_systick(&ms1, PREC_MILLI);
 
     /* now, let's decrypt data that has been read */
-    if (aes_init(&ctx.aes_ctx, ctx.key, AES128, ctx.iv, CTR, AES_DECRYPT, AES_SOFT_UNMASKED, NULL, NULL, -1, -1) != 0) {
+    if (aes_init(&ctx.aes_ctx, ctx.key, AES128, ctx.iv, CTR, AES_DECRYPT, AES_HARD_NODMA, NULL, NULL, -1, -1) != 0) {
         log_printf("[fidostorage] failed while initialize AES\n");
         errcode = MBED_ERROR_UNKNOWN;
         goto err;
