@@ -93,7 +93,7 @@ typedef struct __packed {
 } fidostorage_appid_metadata_t;
 
 
-mbed_error_t    fidostorage_configure(uint8_t *black_buf, uint8_t *red_buf, uint16_t  buflen);
+mbed_error_t    fidostorage_configure(uint8_t *buf, uint16_t  buflen);
 
 mbed_error_t    fidostorage_get_appid_slot(uint8_t* appid, uint32_t *slot);
 

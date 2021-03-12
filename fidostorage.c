@@ -3,6 +3,7 @@
 #include "libc/string.h"
 #include "libc/stdio.h"
 #include "libc/sync.h"
+#include "libc/random.h"
 #include "aes.h"
 #include "libsd.h"
 #include "api/libfidostorage.h"
@@ -21,10 +22,11 @@
 
 
 typedef struct {
-    uint8_t     *black_buf;
-    uint8_t     *red_buf;
+    uint8_t     *buf;
     uint16_t     buflen;
-    uint8_t      key[256];
+    uint8_t      iv[16]; /* do we consider CTR with incremental iv=0 for slot=0 ? */
+    uint8_t      key[16];
+    aes_context  aes_ctx; /* aes context */
     bool         configured;
 } fidostorage_ctx_t;
 
@@ -60,14 +62,14 @@ static inline bool fidostorage_is_configured(void) {
 /*@
   @ requires \separated(black_buf + (0 .. buflen-1),red_buf + (0 .. buflen-1),&ctx);
  */
-mbed_error_t    fidostorage_configure(uint8_t *black_buf, uint8_t *red_buf, uint16_t  buflen)
+mbed_error_t    fidostorage_configure(uint8_t *buf, uint16_t  buflen)
 {
     mbed_error_t errcode = MBED_ERROR_NONE;
     /* we wish to read from the appid table list at least 4 appid slot identifier at a time,
      * for performance constraints */
     uint16_t minsize = 4*sizeof (fidostorage_appid_table_t);
 
-    if (black_buf == NULL || red_buf == NULL || buflen == 0) {
+    if (buf == NULL || buflen == 0) {
         log_printf("[fidostorage] configure: invalid params\n");
         errcode = MBED_ERROR_INVPARAM;
         goto err;
@@ -77,8 +79,7 @@ mbed_error_t    fidostorage_configure(uint8_t *black_buf, uint8_t *red_buf, uint
         errcode = MBED_ERROR_NOMEM;
         goto err;
     }
-    ctx.red_buf = red_buf;
-    ctx.black_buf = black_buf;
+    ctx.buf = buf;
     ctx.buflen = buflen;
     /* we wish to read a multiple of the fidostorage table cell content, to avoid
      * fragmentation */
@@ -102,6 +103,7 @@ mbed_error_t    fidostorage_get_appid_slot(uint8_t* appid, uint32_t *slot)
     mbed_error_t errcode = MBED_ERROR_NONE;
     /* get back buflen (in bytes), convert to words. buflen is already word multiple */
     uint32_t toread = ctx.buflen / 4;
+    uint32_t curr_sector = 0;
 
 
 
@@ -115,23 +117,41 @@ mbed_error_t    fidostorage_get_appid_slot(uint8_t* appid, uint32_t *slot)
         errcode = MBED_ERROR_INVPARAM;
         goto err;
     }
+    uint64_t ms1, ms2;
 
-    uint32_t curr_sector = 0;
+    sys_get_systick(&ms1, PREC_MILLI);
+
+    /* now, let's decrypt data that has been read */
+    if (aes_init(&ctx.aes_ctx, ctx.key, AES128, ctx.iv, CTR, AES_DECRYPT, AES_SOFT_UNMASKED, NULL, NULL, -1, -1) != 0) {
+        log_printf("[fidostorage] failed while initialize AES\n");
+        errcode = MBED_ERROR_UNKNOWN;
+        goto err;
+    }
+
 
     while (curr_sector < (MAX_APPID_TABLE_LEN / SECTOR_SIZE)) {
         /* here we have to cast uint8_t * to uint32_t * because sd_read reads words. Although
          * toread variable is calculated using the uint8_t* buf len. There is no overflow. */
-        log_printf("[fidostorage] reading %d bytes starting from sector %x (@[bytes]: \n", ctx.buflen, curr_sector, curr_sector*SECTOR_SIZE);
+        //log_printf("[fidostorage] reading %d bytes starting from sector %x (@[bytes]: \n", ctx.buflen, curr_sector, curr_sector*SECTOR_SIZE);
         int ret;
         /* INFO: sd_read address argument is **sector address**. Sectors are 512 bytes len (same len as
          * fidostorage_appid_table_t cells).
          */
-        if ((ret = sd_read((uint32_t*)&ctx.black_buf[0], curr_sector, toread)) != SD_SUCCESS) {
+        if ((ret = sd_read((uint32_t*)&ctx.buf[0], curr_sector, toread)) != SD_SUCCESS) {
             log_printf("[fidostorage] Failed during SD_read, from sector %d, %d words to be read: ret=%d\n", curr_sector, toread, ret);
             errcode = MBED_ERROR_RDERROR;
             goto err;
         }
-        /* now, let's decrypt data that has been read */
+        /* let's decrypt */
+#if 1
+        random_secure = SEC_RANDOM_NONSECURE;
+        if (aes_exec(&ctx.aes_ctx, ctx.buf, ctx.buf, ctx.buflen, -1, -1) != 0) {
+            log_printf("[fidostorage] failed while execute AES decryption\n");
+            random_secure = SEC_RANDOM_SECURE;
+            errcode = MBED_ERROR_UNKNOWN;
+            goto err;
+        }
+#endif
 
         // FIX here we call aes on black buf, decrypt toward red_buf
 
@@ -139,7 +159,7 @@ mbed_error_t    fidostorage_get_appid_slot(uint8_t* appid, uint32_t *slot)
         uint16_t numcell = ctx.buflen / sizeof(fidostorage_appid_table_t);
         fidostorage_appid_table_t   *appid_table = NULL;
         for (uint16_t i = 0; i < numcell; ++i) {
-            appid_table = (fidostorage_appid_table_t*)&ctx.red_buf[(i*sizeof(fidostorage_appid_table_t))];
+            appid_table = (fidostorage_appid_table_t*)&ctx.buf[(i*sizeof(fidostorage_appid_table_t))];
             // check if appid_matches
             if (memcmp(appid_table->appid, appid, 32) == 0) {
                 log_printf("[fidostorage] found appid ! slot is %x\n", appid_table->slotid);
@@ -156,6 +176,9 @@ mbed_error_t    fidostorage_get_appid_slot(uint8_t* appid, uint32_t *slot)
     errcode = MBED_ERROR_NOTFOUND;
 
 err:
+    sys_get_systick(&ms2, PREC_MILLI);
+    log_printf("[fidostorage] took %d ms to read, uncrypt and parse %d bytes from uSD\n", (uint32_t)(ms2-ms1), curr_sector*512);
+    random_secure = SEC_RANDOM_SECURE;
     return errcode;
 }
 
@@ -184,7 +207,7 @@ mbed_error_t    fidostorage_set_appid_slot(uint8_t*appid, uint32_t  *slotid)
         /* INFO: sd_read address argument is **sector address**. Sectors are 512 bytes len (same len as
          * fidostorage_appid_table_t cells).
          */
-        if ((ret = sd_read((uint32_t*)&ctx.black_buf[0], curr_sector, toread)) != SD_SUCCESS) {
+        if ((ret = sd_read((uint32_t*)&ctx.buf[0], curr_sector, toread)) != SD_SUCCESS) {
             log_printf("[fidostorage] Failed during SD_read, from sector %d, %d words to be read: ret=%d\n", curr_sector, toread, ret);
             errcode = MBED_ERROR_RDERROR;
             goto err;
@@ -197,7 +220,7 @@ mbed_error_t    fidostorage_set_appid_slot(uint8_t*appid, uint32_t  *slotid)
         uint16_t numcell = ctx.buflen / sizeof(fidostorage_appid_table_t);
         fidostorage_appid_table_t   *appid_table = NULL;
         for (uint16_t i = 0; i < numcell; ++i) {
-            appid_table = (fidostorage_appid_table_t*)&ctx.red_buf[(i*sizeof(fidostorage_appid_table_t))];
+            appid_table = (fidostorage_appid_table_t*)&ctx.buf[(i*sizeof(fidostorage_appid_table_t))];
             if (appid_table->flag != SLOTID_USED) {
                 /* this slot is free, we can use it */
                 /*
