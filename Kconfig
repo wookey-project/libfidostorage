@@ -1,0 +1,26 @@
+config USR_LIB_FIDOSTORAGE
+bool  "FIDO storage abstraction stack"
+  default y
+  select USR_LIB_AES
+  select USR_LIB_SD
+  ---help---
+  Support for FIDO-oriented encrypted storage backend
+
+if USR_LIB_FIDO
+
+menu "libfidostorage options"
+
+config USR_LIB_FIDOSTORAGE_DEBUG
+  int "libfidostorage debug informations level"
+  default 0
+  range 0 2
+  ---help---
+  FIDO2 stack debug level. Supported levels are:
+    * 0: no debug
+    * 1: command execution debug, list received and sent commands
+    * 2: command dump debug, dumping complex commands content and
+         received and sent data size
+
+endmenu
+
+endif
