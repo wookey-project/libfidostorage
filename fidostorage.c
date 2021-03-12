@@ -1,6 +1,7 @@
 #include "libc/types.h"
 #include "libc/random.h"
 #include "libc/string.h"
+#include "libc/stdio.h"
 #include "libc/sync.h"
 #include "aes.h"
 #include "libsd.h"
@@ -13,6 +14,12 @@
 # define log_printf(...)
 #endif
 
+#define SECTOR_SIZE 512
+
+
+
+
+
 typedef struct {
     uint8_t     *black_buf;
     uint8_t     *red_buf;
@@ -22,10 +29,17 @@ typedef struct {
 } fidostorage_ctx_t;
 
 
+typedef enum {
+    SLOTID_FREE     = 0x15e4f8a6UL,
+    SLOTID_USED     = 0x7f180654UL
+} fidostorage_appid_table_flag_t;
+
 typedef struct __packed {
-    // hmac ? other ?
+    uint32_t    flag;
     uint8_t     appid[32];
     uint32_t    slotid;
+    // hmac ? other ?
+    uint8_t     reserved[24]; /* padding to SD sector size */
 } fidostorage_appid_table_t;
 
 static fidostorage_ctx_t ctx = { 0 };
@@ -54,11 +68,12 @@ mbed_error_t    fidostorage_configure(uint8_t *black_buf, uint8_t *red_buf, uint
     uint16_t minsize = 4*sizeof (fidostorage_appid_table_t);
 
     if (black_buf == NULL || red_buf == NULL || buflen == 0) {
+        log_printf("[fidostorage] configure: invalid params\n");
         errcode = MBED_ERROR_INVPARAM;
         goto err;
     }
     if (buflen < minsize) {
-        log_printf("buffer too small, should be at least %d bytes len\n", minsize);
+        log_printf("[fidostorage] configure: buffer too small, should be at least %d bytes len\n", minsize);
         errcode = MBED_ERROR_NOMEM;
         goto err;
     }
@@ -91,21 +106,28 @@ mbed_error_t    fidostorage_get_appid_slot(uint8_t* appid, uint32_t *slot)
 
 
     if (!fidostorage_is_configured()) {
+        log_printf("[fidostorage] not yet configured!\n");
         errcode = MBED_ERROR_INVSTATE;
         goto err;
     }
     if (appid == NULL || slot == NULL) {
+        log_printf("[fidostorage] invalid param !\n");
         errcode = MBED_ERROR_INVPARAM;
         goto err;
     }
 
-    uint32_t address = 0x0;
+    uint32_t curr_sector = 0;
 
-    while (address != (MAX_APPID_TABLE_LEN - ctx.buflen)) {
+    while (curr_sector < (MAX_APPID_TABLE_LEN / SECTOR_SIZE)) {
         /* here we have to cast uint8_t * to uint32_t * because sd_read reads words. Although
          * toread variable is calculated using the uint8_t* buf len. There is no overflow. */
-        if (sd_read((uint32_t*)&ctx.black_buf[0], address, toread) != 0) {
-            log_printf("[fidostorage] Failed during SD_read, sector 0x0, %d words to be read\n", toread);
+        log_printf("[fidostorage] reading %d bytes starting from sector %x (@[bytes]: \n", ctx.buflen, curr_sector, curr_sector*SECTOR_SIZE);
+        int ret;
+        /* INFO: sd_read address argument is **sector address**. Sectors are 512 bytes len (same len as
+         * fidostorage_appid_table_t cells).
+         */
+        if ((ret = sd_read((uint32_t*)&ctx.black_buf[0], curr_sector, toread)) != SD_SUCCESS) {
+            log_printf("[fidostorage] Failed during SD_read, from sector %d, %d words to be read: ret=%d\n", curr_sector, toread, ret);
             errcode = MBED_ERROR_RDERROR;
             goto err;
         }
@@ -114,20 +136,23 @@ mbed_error_t    fidostorage_get_appid_slot(uint8_t* appid, uint32_t *slot)
         // FIX here we call aes on black buf, decrypt toward red_buf
 
         /* decrypted data are in red_buf, we can read from it... */
-        fidostorage_appid_table_t   *appid_table = NULL;
         uint16_t numcell = ctx.buflen / sizeof(fidostorage_appid_table_t);
+        fidostorage_appid_table_t   *appid_table = NULL;
         for (uint16_t i = 0; i < numcell; ++i) {
             appid_table = (fidostorage_appid_table_t*)&ctx.red_buf[(i*sizeof(fidostorage_appid_table_t))];
             // check if appid_matches
             if (memcmp(appid_table->appid, appid, 32) == 0) {
+                log_printf("[fidostorage] found appid ! slot is %x\n", appid_table->slotid);
                 /* appid matches ! */
                 *slot = appid_table->slotid;
                 goto err;
             }
         }
-        address += ctx.buflen;
+        /* cells and sector have the same size */
+        curr_sector += numcell;
     }
     /* appid not found !*/
+    log_printf("[fidostorage] appid not found\n");
     errcode = MBED_ERROR_NOTFOUND;
 
 err:
@@ -135,18 +160,61 @@ err:
 }
 
 
-mbed_error_t    fidostorage_set_appid_slot(uint8_t*appid)
+mbed_error_t    fidostorage_set_appid_slot(uint8_t*appid, uint32_t  *slotid)
 {
     mbed_error_t errcode = MBED_ERROR_NONE;
+    uint32_t toread = ctx.buflen / 4;
 
     if (!fidostorage_is_configured()) {
         errcode = MBED_ERROR_INVSTATE;
         goto err;
     }
-    if (appid == NULL) {
+    if (appid == NULL || slotid == NULL) {
         errcode = MBED_ERROR_INVPARAM;
         goto err;
     }
+
+    uint32_t curr_sector = 0;
+
+    while (curr_sector < (MAX_APPID_TABLE_LEN / SECTOR_SIZE)) {
+        /* here we have to cast uint8_t * to uint32_t * because sd_read reads words. Although
+         * toread variable is calculated using the uint8_t* buf len. There is no overflow. */
+        log_printf("[fidostorage] reading %d bytes starting from sector %x (@[bytes]: \n", ctx.buflen, curr_sector, curr_sector*SECTOR_SIZE);
+        int ret;
+        /* INFO: sd_read address argument is **sector address**. Sectors are 512 bytes len (same len as
+         * fidostorage_appid_table_t cells).
+         */
+        if ((ret = sd_read((uint32_t*)&ctx.black_buf[0], curr_sector, toread)) != SD_SUCCESS) {
+            log_printf("[fidostorage] Failed during SD_read, from sector %d, %d words to be read: ret=%d\n", curr_sector, toread, ret);
+            errcode = MBED_ERROR_RDERROR;
+            goto err;
+        }
+        /* now, let's decrypt data that has been read */
+
+        // FIX here we call aes on black buf, decrypt toward red_buf
+
+        /* decrypted data are in red_buf, we can read from it... */
+        uint16_t numcell = ctx.buflen / sizeof(fidostorage_appid_table_t);
+        fidostorage_appid_table_t   *appid_table = NULL;
+        for (uint16_t i = 0; i < numcell; ++i) {
+            appid_table = (fidostorage_appid_table_t*)&ctx.red_buf[(i*sizeof(fidostorage_appid_table_t))];
+            if (appid_table->flag != SLOTID_USED) {
+                /* this slot is free, we can use it */
+                /*
+                 * we can write back appid ref to current cell in SD.
+                 * the associated slotid is the one already set in SDCard, as this one is free.
+                 * The corresponding metadata will have to be set using fidostorage_set_appid_metadata()
+                 * using the slotid we update here
+                 */
+                *slotid = appid_table->slotid;
+            }
+        }
+        /* cells and sector have the same size */
+        curr_sector += numcell;
+    }
+    /* appid not found !*/
+    log_printf("[fidostorage] appid not found\n");
+    errcode = MBED_ERROR_NOMEM;
 
 err:
     return errcode;

@@ -24,6 +24,49 @@
 #ifndef LIBFIDOSTORAGE_H_
 #define LIBFIDOSTORAGE_H_
 
+/*
+ * How it works:
+ *
+ *      SDCard (encrypted)
+ *
+ * |----------------------------|               \
+ * | flag|appid1|slotid1|xxxxxxx| (len 512)     |
+ * |----------------------------|               |
+ * | flag|appid2|slotid2|xxxxxxx| (len 512)     = global slotting table
+ * |----------------------------|               |
+ * | flag|appid3|slotid3|xxxxxxx| (len 512)     |
+ * |----------------------------|               /
+ * | ... (upto 4M len max)      |
+ * |                            |
+ * |xxxxxxxxx (padding) xxxxxxxx|
+ * |----------------------------|
+ * |           hmac             | <---- at slotid1 sector @
+ * |appid|ctr|icon-type|icon_len|
+ * |icon.........               |
+ * |              xxx(padding)xx|
+ * |----------------------------|
+ * |           hmac             | <---- at slotid2 sector @
+ * |appid|ctr|icon-type|icon_len|
+ * |icon.........               |
+ * |----------------------------|
+ *
+ *
+ * We first read the global slotting table to get back the
+ * metadata sector addr (slotid) associated to the corresponding
+ * appid.
+ * We then get back the metadata of this appid and use it.
+ *
+ * By default, all well-known appid (google, gitlab, etc.)
+ * have their {appid/slotid} couple set and metadata icon
+ * set. The flag is marked as free while no register has
+ * been executed.
+ *
+ * This allows to use predefined icons for these well-known appid.
+ *
+ * This library also provides setting API to set metadata and
+ * register a new appid to the first free line of the slotting
+ * table.
+ */
 
 #define MAX_APPID_TABLE_LEN 4000000UL /* 4MB */
 
@@ -54,7 +97,7 @@ mbed_error_t    fidostorage_configure(uint8_t *black_buf, uint8_t *red_buf, uint
 
 mbed_error_t    fidostorage_get_appid_slot(uint8_t* appid, uint32_t *slot);
 
-mbed_error_t    fidostorage_set_appid_slot(uint8_t*appid);
+mbed_error_t    fidostorage_set_appid_slot(uint8_t*appid, uint32_t  *slotid);
 
 mbed_error_t    fidostorage_get_appid_metadata(uint8_t const * const appid, uint32_t    appid_slot, uint8_t *data_buffer);
 
