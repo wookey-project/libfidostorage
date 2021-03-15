@@ -76,6 +76,7 @@ typedef enum {
 } fidostorage_icon_type_t;
 
 typedef union {
+    uint8_t padding[4]; /* always read 4 bytes multiple (DMA request) */
     uint8_t rgb_color[3];
     uint8_t icon[0]; /* null-sized */
 } fidostorage_icon_data_t;
@@ -84,8 +85,8 @@ typedef struct __packed {
     uint8_t      hmac[64];
     uint8_t      appid[32];
     uint32_t     ctr;
-    uint8_t      icon_type;
     uint16_t     icon_len;
+    uint16_t      icon_type;
     /* when setting new apid, there is no need to specify the icon content in case of icon image,
      * as the icon image is already set in the SDCard. In case of icon color, use the
      * rgb field of the union. */
@@ -93,13 +94,15 @@ typedef struct __packed {
 } fidostorage_appid_metadata_t;
 
 
+mbed_error_t fidostorage_declare(void);
+
 mbed_error_t    fidostorage_configure(uint8_t *buf, uint16_t  buflen);
 
 mbed_error_t    fidostorage_get_appid_slot(uint8_t* appid, uint32_t *slot);
 
 mbed_error_t    fidostorage_set_appid_slot(uint8_t*appid, uint32_t  *slotid);
 
-mbed_error_t    fidostorage_get_appid_metadata(uint8_t const * const appid, uint32_t    appid_slot, uint8_t *data_buffer);
+mbed_error_t    fidostorage_get_appid_metadata(uint8_t const * const appid, uint32_t    appid_slot, fidostorage_appid_metadata_t *data_buffer);
 
 mbed_error_t    fidostorage_set_appid_metada(uint8_t *appid, uint32_t   appid_slot, fidostorage_appid_metadata_t const * const metadata);
 
