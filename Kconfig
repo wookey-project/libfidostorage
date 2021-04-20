@@ -11,15 +11,17 @@ if USR_LIB_FIDO
 menu "libfidostorage options"
 
 config USR_LIB_FIDOSTORAGE_DEBUG
-  int "libfidostorage debug informations level"
-  default 0
-  range 0 2
+  bool "libfidostorage debug informations level"
+  default n
   ---help---
-  FIDO2 stack debug level. Supported levels are:
-    * 0: no debug
-    * 1: command execution debug, list received and sent commands
-    * 2: command dump debug, dumping complex commands content and
-         received and sent data size
+  FIDO storage stack debug activation.
+
+config USR_LIB_FIDOSTORAGE_PERFS
+  bool "libfidostorage access times measurements and dump"
+  default n
+  ---help---
+  FIDO storage access time (including (de|en)cryption time calculation and pretty printing.
+
 
 endmenu
 

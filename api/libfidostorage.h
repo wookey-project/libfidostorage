@@ -27,25 +27,26 @@
 /*
  * How it works:
  *
- *      SDCard (encrypted)
  *
+ *        SDCard (encrypted)
+ * | bitmap of active sectors   | (len 1024 (two sectors))
+ * |----------------------------|
+ * | hmac of slotting table     | (len 512)
  * |----------------------------|               \
- * | flag|appid1|slotid1|xxxxxxx| (len 512)     |
+ * | appid1|slotid1|hmac        | (len 512)     |
  * |----------------------------|               |
- * | flag|appid2|slotid2|xxxxxxx| (len 512)     = global slotting table
+ * | appid2|slotid2|hmac        | (len 512)     = global slotting table
  * |----------------------------|               |
- * | flag|appid3|slotid3|xxxxxxx| (len 512)     |
+ * | appid3|slotid3|hmac        | (len 512)     |
  * |----------------------------|               /
  * | ... (upto 4M len max)      |
  * |                            |
  * |xxxxxxxxx (padding) xxxxxxxx|
  * |----------------------------|
- * |           hmac             | <---- at slotid1 sector @
  * |appid|ctr|icon-type|icon_len|
  * |icon.........               |
  * |              xxx(padding)xx|
  * |----------------------------|
- * |           hmac             | <---- at slotid2 sector @
  * |appid|ctr|icon-type|icon_len|
  * |icon.........               |
  * |----------------------------|
@@ -70,40 +71,77 @@
 
 #define MAX_APPID_TABLE_LEN 4000000UL /* 4MB */
 
+#define SECTOR_SIZE 512
+#define SLOT_NUM 8192
+#define SLOT_SIZE 4096
+
+
 typedef enum {
     ICON_TYPE_IMAGE = 0,
     ICON_TYPE_COLOR = 1,
 } fidostorage_icon_type_t;
 
+/*
+ * An icon is one of the following (depending on icon type): RGB color, or effective icon
+ */
 typedef union {
-    uint8_t padding[4]; /* always read 4 bytes multiple (DMA request) */
-    uint8_t rgb_color[3];
-    uint8_t icon[0]; /* null-sized */
+    uint8_t                 rgb_color[3];
+    uint8_t                 icon_data[SLOT_SIZE - 104]; /*< padding to appid slot size */
 } fidostorage_icon_data_t;
 
-typedef struct __packed {
-    uint8_t      hmac[64];
-    uint8_t      appid[32];
-    uint32_t     ctr;
-    uint16_t     icon_len;
-    uint16_t      icon_type;
-    /* when setting new apid, there is no need to specify the icon content in case of icon image,
-     * as the icon image is already set in the SDCard. In case of icon color, use the
-     * rgb field of the union. */
-    fidostorage_icon_data_t  icon;
-} fidostorage_appid_metadata_t;
+/*
+ * The effective appid information structure
+ */
+typedef struct __packed  __attribute__ ((aligned (4))) {
+    uint8_t     appid[32];              /*< application identifier */
+    uint32_t    flags;                  /*< various U2F2 specific flags */
+    uint8_t     name[60];               /*< Appid human readable name */
+    uint32_t    ctr;                    /*< CTR value */
+    uint16_t    icon_len;               /*< icon length in bytes (for icon data type */
+    uint16_t    icon_type;              /*< icon type (RGB color or icon data) */
+    fidostorage_icon_data_t icon;       /*< icon data union (RGB color value or icon data value in RLE encoding) */
+} fidostorage_appid_slot_t;
 
 
+/* declaration phase */
 mbed_error_t fidostorage_declare(void);
 
+/* configure buffers */
 mbed_error_t    fidostorage_configure(uint8_t *buf, uint16_t  buflen);
 
-mbed_error_t    fidostorage_get_appid_slot(uint8_t* appid, uint32_t *slot);
+/* given an appid, is the appid valid (already at least registered) ? - bitmap check */
+mbed_error_t    fidostorage_appid_is_valid(uint8_t *appid);
 
-mbed_error_t    fidostorage_set_appid_slot(uint8_t*appid, uint32_t  *slotid);
+mbed_error_t    fidostorage_check_appid_table_integrity(void);
 
-mbed_error_t    fidostorage_get_appid_metadata(uint8_t const * const appid, uint32_t    appid_slot, fidostorage_appid_metadata_t *data_buffer);
+/**
+ * get the appid storage slot from the appid value
+ * @param appid  the effective FIDO appid value
+ * @param slot   the slotid to return
+ * @param hmac   the slot HMAC to return
+ *
+ * @return MBED_ERROR_NONE if the appid is found, or MBED_ERROR_NOTFOUND if not.
+ */
+mbed_error_t    fidostorage_get_appid_slot(uint8_t const * const appid, uint32_t * const slot, uint8_t * const hmac);
 
-mbed_error_t    fidostorage_set_appid_metada(uint8_t *appid, uint32_t   appid_slot, fidostorage_appid_metadata_t const * const metadata);
+/**
+ * get the appid slot content from the appid value, its slot id and HMAC value. The slot
+ * integrity is checked by this function.
+ * @param appid           the effective FIDO appid value
+ * @param appid_slot      the appid slot identifier returned by fidostorage_get_appid_slot
+ * @param appid_slot_hmac the appid slot HMAC returned by fidostorage_get_appid_slot
+ * @param data_buffer     the effective appid metainformations to return
+ *
+ * @return MBED_ERROR_NONE if the appid is found, or MBED_ERROR_NOTFOUND if not.
+ */
+mbed_error_t    fidostorage_get_appid_metadata(uint8_t const * const     appid,
+                                               uint32_t const            appid_slot,
+                                               uint8_t const *           appid_slot_hmac,
+                                               fidostorage_appid_slot_t *data_buffer);
+
+
+mbed_error_t    fidostorage_register_appid(uint8_t const * const appid, uint32_t  * const appid_slot);
+
+mbed_error_t    fidostorage_set_appid_metada(uint8_t *appid, uint32_t   appid_slot, fidostorage_appid_slot_t const * const metadata);
 
 #endif/*!LIBFIDOSTORAGE_H_*/

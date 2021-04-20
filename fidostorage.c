@@ -4,6 +4,7 @@
 #include "libc/stdio.h"
 #include "libc/sync.h"
 #include "libc/random.h"
+#include "hmac.h"
 #include "aes.h"
 #include "libsd.h"
 #include "libcryp.h"
@@ -16,7 +17,6 @@
 # define log_printf(...)
 #endif
 
-#define SECTOR_SIZE 512
 #define APPID_METADA_SLOT_MAX 2048
 
 
@@ -41,18 +41,37 @@ typedef struct {
 } fidostorage_ctx_t;
 
 
+/**********************************************************
+ * About storage structure header definition keeped private)
+ */
 typedef enum {
     SLOTID_FREE     = 0x15e4f8a6UL,
     SLOTID_USED     = 0x7f180654UL
 } fidostorage_appid_table_flag_t;
 
+/*
+ * appid table struct
+ */
 typedef struct __packed {
-    uint32_t    flag;
-    uint8_t     appid[32];
-    uint32_t    slotid;
-    // hmac ? other ?
-    uint8_t     reserved[24]; /* padding to SD sector size */
+    uint8_t     appid[32];                  /*< application identifier */
+    uint32_t    slotid;                     /*< slot identifier, corresponding to sector identifier in SDCard
+                                                where the appid infos are written */
+    uint8_t     hmac[32];                   /*< appid slot HMAC        */
+    uint8_t     padding[SECTOR_SIZE - 68];  /*< padding to sector size */
 } fidostorage_appid_table_t;
+
+/*
+ * Specify the effective SDCard header structure.
+ * This structure MUST NOT be instanciate, as its size is ~4MB.
+ * IT is used as a helper to type buffer that are read and uncyphered from
+ * the SDCard
+ */
+typedef struct __packed {
+    uint8_t     bitmap[SLOT_NUM / 8];                   /*< list of activated/unactivated slots (bitmap) */
+    uint8_t     hmac[32];                               /*< HMAC for the overall fifodstorage_header_t */
+    uint8_t     padding[SECTOR_SIZE - 32];              /*< padding for HMAC sector */
+    fidostorage_appid_table_t   appid_table[SLOT_NUM];  /*< table of all appid header (se above) */
+} fidostorage_header_t;
 
 static fidostorage_ctx_t ctx = { 0 };
 
@@ -126,29 +145,34 @@ err:
  */
 
 /* appid is 32 bytes len identifier */
-mbed_error_t    fidostorage_get_appid_slot(uint8_t* appid, uint32_t *slot)
+mbed_error_t    fidostorage_get_appid_slot(uint8_t const * const appid, uint32_t *slot, uint8_t *hmac)
 {
     mbed_error_t errcode = MBED_ERROR_NONE;
     /* get back buflen (in bytes), convert to words. buflen is already word multiple */
+    /* INFO: this is an optimization here as we read more than one sector at a time, and check
+     * multiple appid table lines in the buffer before reading and decrypting another buffer */
     uint32_t toread = ctx.buflen / 4;
-    uint32_t curr_sector = 0;
-    uint32_t i = 0;
+    uint32_t curr_sector = 3; /* bitmap and HMAC not read here */
 
-
+#if CONFIG_USR_LIB_FIDOSTORAGE_PERFS
+    uint32_t loop_turn = 0;
+#endif
 
     if (!fidostorage_is_configured()) {
         log_printf("[fidostorage] not yet configured!\n");
         errcode = MBED_ERROR_INVSTATE;
         goto err;
     }
-    if (appid == NULL || slot == NULL) {
+    if (appid == NULL || slot == NULL || hmac == NULL) {
         log_printf("[fidostorage] invalid param !\n");
         errcode = MBED_ERROR_INVPARAM;
         goto err;
     }
+#if CONFIG_USR_LIB_FIDOSTORAGE_PERFS
     uint64_t ms1, ms2;
 
     sys_get_systick(&ms1, PREC_MILLI);
+#endif
 
     /* now, let's decrypt data that has been read */
     if (aes_init(&ctx.aes_ctx, ctx.key, AES128, ctx.iv, CTR, AES_DECRYPT, AES_HARD_DMA, dma_in_complete, dma_out_complete, ctx.dma_in_desc, ctx.dma_out_desc) != 0) {
@@ -158,7 +182,8 @@ mbed_error_t    fidostorage_get_appid_slot(uint8_t* appid, uint32_t *slot)
     }
 
 
-    while (curr_sector < (MAX_APPID_TABLE_LEN / SECTOR_SIZE)) {
+    /* we start from sector 3, for max SLOT_NUM slots */
+    while (curr_sector < SLOT_NUM+3) {
         /* here we have to cast uint8_t * to uint32_t * because sd_read reads words. Although
          * toread variable is calculated using the uint8_t* buf len. There is no overflow. */
         //log_printf("[fidostorage] reading %d bytes starting from sector %x (@[bytes]: %d\n", ctx.buflen, curr_sector, curr_sector*SECTOR_SIZE);
@@ -185,99 +210,63 @@ mbed_error_t    fidostorage_get_appid_slot(uint8_t* appid, uint32_t *slot)
         /* cryp DMA finished, clean flags */
         ctx.dma_out_finished = false;
         ctx.dma_in_finished = false;
-        // FIX here we call aes on black buf, decrypt toward red_buf
 
-        /* decrypted data are in red_buf, we can read from it... */
         uint16_t numcell = ctx.buflen / sizeof(fidostorage_appid_table_t);
         fidostorage_appid_table_t   *appid_table = NULL;
-        for (uint16_t i = 0; i < numcell; ++i) {
-            appid_table = (fidostorage_appid_table_t*)&ctx.buf[(i*sizeof(fidostorage_appid_table_t))];
+        for (uint16_t j = 0; j < numcell; ++j) {
+            appid_table = (fidostorage_appid_table_t*)&ctx.buf[(j*sizeof(fidostorage_appid_table_t))];
             // check if appid_matches
             if (memcmp(appid_table->appid, appid, 32) == 0) {
                 log_printf("[fidostorage] found appid ! slot is %x\n", appid_table->slotid);
-                /* appid matches ! */
+                /* appid matches ! return slot id and slot HMAC */
                 *slot = appid_table->slotid;
+                memcpy(hmac, &appid_table->hmac[0], 32);
                 goto err;
             }
         }
         /* cells and sector have the same size */
-        curr_sector += (ctx.buflen / SECTOR_SIZE);
-        i++;
+        curr_sector += (ctx.buflen / sizeof(fidostorage_appid_table_t));
+#if CONFIG_USR_LIB_FIDOSTORAGE_PERFS
+        loop_turn++;
+#endif
     }
     /* appid not found !*/
     log_printf("[fidostorage] appid not found\n");
     errcode = MBED_ERROR_NOTFOUND;
 
 err:
+#if CONFIG_USR_LIB_FIDOSTORAGE_PERFS
     sys_get_systick(&ms2, PREC_MILLI);
     log_printf("[fidostorage] took %d ms to read, uncrypt and parse %d bytes from uSD\n", (uint32_t)(ms2-ms1), curr_sector*512);
-    log_printf("[fidostorage] %d loops executed\n", i);
+    log_printf("[fidostorage] %d loops executed\n", loop_turn);
+#endif
     random_secure = SEC_RANDOM_SECURE;
     return errcode;
 }
 
 
-mbed_error_t    fidostorage_set_appid_slot(uint8_t*appid, uint32_t  *slotid)
+mbed_error_t    fidostorage_register_appid(uint8_t const * const appid, uint32_t  * const appid_slot)
 {
     mbed_error_t errcode = MBED_ERROR_NONE;
-    uint32_t toread = ctx.buflen / 4;
 
     if (!fidostorage_is_configured()) {
         errcode = MBED_ERROR_INVSTATE;
         goto err;
     }
-    if (appid == NULL || slotid == NULL) {
+    if (appid == NULL || appid_slot == NULL) {
         errcode = MBED_ERROR_INVPARAM;
         goto err;
     }
 
-    uint32_t curr_sector = 0;
-
-    while (curr_sector < (MAX_APPID_TABLE_LEN / SECTOR_SIZE)) {
-        /* here we have to cast uint8_t * to uint32_t * because sd_read reads words. Although
-         * toread variable is calculated using the uint8_t* buf len. There is no overflow. */
-        log_printf("[fidostorage] reading %d bytes starting from sector %x (@[bytes]: \n", ctx.buflen, curr_sector, curr_sector*SECTOR_SIZE);
-        int ret;
-        /* INFO: sd_read address argument is **sector address**. Sectors are 512 bytes len (same len as
-         * fidostorage_appid_table_t cells).
-         */
-        if ((ret = sd_read((uint32_t*)&ctx.buf[0], curr_sector, toread)) != SD_SUCCESS) {
-            log_printf("[fidostorage] Failed during SD_read, from sector %d, %d words to be read: ret=%d\n", curr_sector, toread, ret);
-            errcode = MBED_ERROR_RDERROR;
-            goto err;
-        }
-        /* now, let's decrypt data that has been read */
-
-        // FIX here we call aes on black buf, decrypt toward red_buf
-
-        /* decrypted data are in red_buf, we can read from it... */
-        uint16_t numcell = ctx.buflen / sizeof(fidostorage_appid_table_t);
-        fidostorage_appid_table_t   *appid_table = NULL;
-        for (uint16_t i = 0; i < numcell; ++i) {
-            appid_table = (fidostorage_appid_table_t*)&ctx.buf[(i*sizeof(fidostorage_appid_table_t))];
-            if (appid_table->flag != SLOTID_USED) {
-                /* this slot is free, we can use it */
-                /*
-                 * we can write back appid ref to current cell in SD.
-                 * the associated slotid is the one already set in SDCard, as this one is free.
-                 * The corresponding metadata will have to be set using fidostorage_set_appid_metadata()
-                 * using the slotid we update here
-                 */
-                *slotid = appid_table->slotid;
-            }
-        }
-        /* cells and sector have the same size */
-        curr_sector += numcell;
-    }
-    /* appid not found !*/
-    log_printf("[fidostorage] appid not found\n");
-    errcode = MBED_ERROR_NOMEM;
 
 err:
     return errcode;
 }
 
-mbed_error_t    fidostorage_get_appid_metadata(uint8_t const * const appid, uint32_t    appid_slot, fidostorage_appid_metadata_t *data_buffer)
+mbed_error_t    fidostorage_get_appid_metadata(uint8_t const * const     appid,
+                                               uint32_t const            appid_slot,
+                                               uint8_t const *           appid_slot_hmac,
+                                               fidostorage_appid_slot_t *data_buffer)
 {
     mbed_error_t errcode = MBED_ERROR_NONE;
 
@@ -285,13 +274,15 @@ mbed_error_t    fidostorage_get_appid_metadata(uint8_t const * const appid, uint
         errcode = MBED_ERROR_INVSTATE;
         goto err;
     }
-    if (appid == NULL || data_buffer == NULL) {
+    if (appid == NULL || data_buffer == NULL || appid_slot_hmac == NULL) {
         errcode = MBED_ERROR_INVPARAM;
         goto err;
     }
+#if CONFIG_USR_LIB_FIDOSTORAGE_PERFS
     uint64_t ms1, ms2;
 
     sys_get_systick(&ms1, PREC_MILLI);
+#endif
 
     /* now, let's decrypt data that has been read */
     if (aes_init(&ctx.aes_ctx, ctx.key, AES128, ctx.iv, CTR, AES_DECRYPT, AES_HARD_DMA, dma_in_complete, dma_out_complete, ctx.dma_in_desc, ctx.dma_out_desc) != 0) {
@@ -302,7 +293,7 @@ mbed_error_t    fidostorage_get_appid_metadata(uint8_t const * const appid, uint
 
     /* we read potentially more than needed, but it is faster than reading two times, barsing icon len
      * after the first read. */
-    uint16_t toread = APPID_METADA_SLOT_MAX;
+    uint16_t toread = SLOT_SIZE;
 
     /* here we have to cast uint8_t * to uint32_t * because sd_read reads words. Although
      * toread variable is calculated using the uint8_t* buf len. There is no overflow. */
@@ -310,14 +301,14 @@ mbed_error_t    fidostorage_get_appid_metadata(uint8_t const * const appid, uint
     /* INFO: sd_read address argument is **sector address**. Sectors are 512 bytes len (same len as
      * fidostorage_appid_table_t cells).
      */
-    if ((ret = sd_read((uint32_t*)&ctx.buf[0], appid_slot, toread)) != SD_SUCCESS) {
+    if ((ret = sd_read((uint32_t*)data_buffer, appid_slot, toread)) != SD_SUCCESS) {
         log_printf("[fidostorage] Failed during SD_read, from sector %d, %d words to be read: ret=%d\n", appid_slot, toread, ret);
         errcode = MBED_ERROR_RDERROR;
         goto err;
     }
     /* let's decrypt first part of appid metadata (icon not included) */
     random_secure = SEC_RANDOM_NONSECURE;
-    if (aes_exec(&ctx.aes_ctx, ctx.buf, ctx.buf, toread, ctx.dma_in_desc, ctx.dma_out_desc) != 0) {
+    if (aes_exec(&ctx.aes_ctx, ctx.buf, (uint8_t*)data_buffer, toread, ctx.dma_in_desc, ctx.dma_out_desc) != 0) {
         log_printf("[fidostorage] failed while execute AES decryption\n");
         random_secure = SEC_RANDOM_SECURE;
         errcode = MBED_ERROR_UNKNOWN;
@@ -330,9 +321,9 @@ mbed_error_t    fidostorage_get_appid_metadata(uint8_t const * const appid, uint
     ctx.dma_out_finished = false;
     ctx.dma_in_finished = false;
     /* check if we need to read more (is there an icon to get back ? */
-    fidostorage_appid_metadata_t *mt = (fidostorage_appid_metadata_t*)&ctx.buf[0];
+    fidostorage_appid_slot_t *mt = (fidostorage_appid_slot_t*)&data_buffer[0];
+
     /* is appid for this slot id match the one given ? */
-    /* FIX: check slot integrity */
     if (memcmp(appid, mt->appid, 32) != 0) {
         log_printf("[fidostorage] metadata does not correspond to the correct appid\n");
         errcode = MBED_ERROR_INVPARAM;
@@ -340,21 +331,46 @@ mbed_error_t    fidostorage_get_appid_metadata(uint8_t const * const appid, uint
     }
     /* overflow detection */
     if (mt->icon_type == ICON_TYPE_IMAGE &&
-        mt->icon_len > (APPID_METADA_SLOT_MAX - (sizeof(fidostorage_appid_metadata_t) - sizeof(fidostorage_icon_data_t)))) {
+        mt->icon_len > (SLOT_SIZE - (sizeof(fidostorage_appid_slot_t) - sizeof(fidostorage_icon_data_t)))) {
         log_printf("[fidostorage] metadata icon len is invalid (too big)\n");
         errcode = MBED_ERROR_INVSTATE;
         goto err;
     }
-    memcpy(data_buffer, mt, sizeof(fidostorage_appid_metadata_t));
-    log_printf("[fidostorage] appid metadata transmitted\n");
+
+    /* check slot integrity */
+    hmac_context hmac_ctx;
+    uint8_t         hmac[32];
+    uint32_t hmac_len = 0;
+
+
+    hmac_init(&hmac_ctx, appid_slot_hmac, SHA256_DIGEST_SIZE, SHA256);
+    hmac_update(&hmac_ctx, mt->appid, 32);
+    hmac_update(&hmac_ctx, (uint8_t*)&mt->flags, 4);
+    hmac_update(&hmac_ctx, mt->name, 60);
+    hmac_update(&hmac_ctx, (uint8_t*)&mt->ctr, 4);
+    hmac_update(&hmac_ctx, (uint8_t*)&mt->icon_len, 2);
+    hmac_update(&hmac_ctx, (uint8_t*)&mt->icon_type, 2);
+    if (mt->icon_len != 0) {
+        hmac_update(&hmac_ctx, &mt->icon.icon_data[0], mt->icon_len);
+    }
+    hmac_finalize(&hmac_ctx, &hmac[0], &hmac_len);
+    if (memcmp(hmac, appid_slot_hmac, 32) != 0) {
+        log_printf("[fidostorage] metadata HMAC does not match given one !!!\n");
+        errcode = MBED_ERROR_INVSTATE;
+        goto err;
+    }
+
+    log_printf("[fidostorage] appid metadata valid !\n");
 err:
+#if CONFIG_USR_LIB_FIDOSTORAGE_PERFS
     sys_get_systick(&ms2, PREC_MILLI);
     log_printf("[fidostorage] metadata read, uncrypt and parsing took %d ms\n", (uint32_t)(ms2 - ms1));
+#endif
     random_secure = SEC_RANDOM_SECURE;
     return errcode;
 }
 
-mbed_error_t    fidostorage_set_appid_metada(uint8_t *appid, uint32_t   appid_slot, fidostorage_appid_metadata_t const * const metadata)
+mbed_error_t    fidostorage_set_appid_metada(uint8_t *appid, uint32_t   appid_slot, fidostorage_appid_slot_t const * const metadata)
 {
     mbed_error_t errcode = MBED_ERROR_NONE;
 
