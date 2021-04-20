@@ -4,6 +4,7 @@
 #include "libc/stdio.h"
 #include "libc/sync.h"
 #include "libc/random.h"
+#include "libc/arpa/inet.h"
 #include "hmac.h"
 #include "aes.h"
 #include "libsd.h"
@@ -27,7 +28,9 @@ typedef struct {
     uint8_t     *buf;
     uint16_t     buflen;
     uint8_t      iv[16]; /* do we consider CTR with incremental iv=0 for slot=0 ? */
-    uint8_t      key[16];
+    uint8_t      key[32];
+    uint8_t      key_h[32];
+    uint32_t     key_len;
     aes_context  aes_ctx; /* aes context */
     bool         configured;
     /* in case of CRYP with DMA usage */
@@ -92,6 +95,64 @@ void dma_out_complete(uint8_t irq __attribute__((unused)), uint32_t status __att
     request_data_membarrier();
 }
 
+/* cryptographic sector size is 4096 */
+static mbed_error_t fidostorate_get_iv_from_crypto_sector(uint32_t sector, uint8_t *key_h, uint8_t *iv, uint32_t iv_len) {
+    mbed_error_t errcode = MBED_ERROR_NONE;
+    //
+    if (iv_len < 16) {
+        log_printf("[fidostorage] IV len to small\n");
+        errcode = MBED_ERROR_INVPARAM;
+        goto err;
+    }
+    if (iv == NULL || key_h == NULL) {
+        errcode = MBED_ERROR_INVPARAM;
+        goto err;
+    }
+    /* ESSIV is big endian */
+    uint32_t big_endian_sector_number = htonl(sector);
+    /* marshaling from uint32 to u[4] buffer */
+    uint8_t sector_number_buff[16] = { 0 };
+
+    sector_number_buff[0] = (big_endian_sector_number >> 0) & 0xff;
+    sector_number_buff[1] = (big_endian_sector_number >> 8) & 0xff;
+    sector_number_buff[2] = (big_endian_sector_number >> 16) & 0xff;
+    sector_number_buff[3] = (big_endian_sector_number >> 24) & 0xff;
+
+
+    /* create ESSIV from sector id */
+    if (aes_init(&ctx.aes_ctx, key_h, AES256, NULL, ECB, AES_ENCRYPT, AES_SOFT_UNMASKED, NULL, NULL, -1, -1)) {
+        errcode = MBED_ERROR_UNKNOWN;
+        goto err;
+    }
+    /* and encrypt sector in AES-ECB */
+    if (aes_exec(&ctx.aes_ctx, sector_number_buff, iv, iv_len, -1, -1)) {
+        errcode = MBED_ERROR_UNKNOWN;
+        goto err;
+    }
+err:
+    return errcode;
+}
+
+static mbed_error_t fidostorage_get_key_from_master(uint8_t *master, uint8_t *key_h, uint32_t *keylen) {
+    mbed_error_t errcode = MBED_ERROR_NONE;
+
+    if (master == NULL || key_h == NULL || keylen == NULL) {
+        errcode = MBED_ERROR_INVPARAM;
+        goto err;
+    }
+    // K = SHA-256("ENCRYPTION"+K_M)
+    const char *encryption = "ENCRYPTION";
+    sha256_context sha256_ctx;
+    sha256_init(&sha256_ctx);
+    sha256_update(&sha256_ctx, (const unsigned char*)encryption, 10);
+    sha256_update(&sha256_ctx, master, 32);
+    sha256_final(&sha256_ctx, key_h);
+    *keylen = 32;
+
+err:
+    return errcode;
+}
+
 
 
 /**********************************************************
@@ -109,12 +170,12 @@ mbed_error_t fidostorage_declare(void)
 /*@
   @ requires \separated(black_buf + (0 .. buflen-1),red_buf + (0 .. buflen-1),&ctx);
  */
-mbed_error_t    fidostorage_configure(uint8_t *buf, uint16_t  buflen)
+mbed_error_t    fidostorage_configure(uint8_t *buf, uint16_t  buflen, uint8_t *aes_key)
 {
     mbed_error_t errcode = MBED_ERROR_NONE;
     /* we wish to read from the appid table list at least 4 appid slot identifier at a time,
      * for performance constraints */
-    uint16_t minsize = 4*sizeof (fidostorage_appid_table_t);
+    uint16_t minsize = 8 * SECTOR_SIZE;
 
     if (buf == NULL || buflen == 0) {
         log_printf("[fidostorage] configure: invalid params\n");
@@ -134,6 +195,9 @@ mbed_error_t    fidostorage_configure(uint8_t *buf, uint16_t  buflen)
         /* align to word-sized below */
         ctx.buflen -= (ctx.buflen % sizeof (fidostorage_appid_table_t));
     }
+    /* set storage key */
+    memcpy(&ctx.key[0], aes_key, 32);
+    fidostorage_get_key_from_master(aes_key, &ctx.key_h[0], &ctx.key_len);
     ctx.configured = true;
     request_data_membarrier();
 err:
@@ -152,7 +216,7 @@ mbed_error_t    fidostorage_get_appid_slot(uint8_t const * const appid, uint32_t
     /* INFO: this is an optimization here as we read more than one sector at a time, and check
      * multiple appid table lines in the buffer before reading and decrypting another buffer */
     uint32_t toread = ctx.buflen / 4;
-    uint32_t curr_sector = 3; /* bitmap and HMAC not read here */
+    uint32_t curr_sector = 8; /* bitmap and HMAC not read here */
 
 #if CONFIG_USR_LIB_FIDOSTORAGE_PERFS
     uint32_t loop_turn = 0;
@@ -174,16 +238,8 @@ mbed_error_t    fidostorage_get_appid_slot(uint8_t const * const appid, uint32_t
     sys_get_systick(&ms1, PREC_MILLI);
 #endif
 
-    /* now, let's decrypt data that has been read */
-    if (aes_init(&ctx.aes_ctx, ctx.key, AES128, ctx.iv, CTR, AES_DECRYPT, AES_HARD_DMA, dma_in_complete, dma_out_complete, ctx.dma_in_desc, ctx.dma_out_desc) != 0) {
-        log_printf("[fidostorage] failed while initialize AES\n");
-        errcode = MBED_ERROR_UNKNOWN;
-        goto err;
-    }
-
-
     /* we start from sector 3, for max SLOT_NUM slots */
-    while (curr_sector < SLOT_NUM+3) {
+    while (curr_sector < SLOT_NUM+8) {
         /* here we have to cast uint8_t * to uint32_t * because sd_read reads words. Although
          * toread variable is calculated using the uint8_t* buf len. There is no overflow. */
         //log_printf("[fidostorage] reading %d bytes starting from sector %x (@[bytes]: %d\n", ctx.buflen, curr_sector, curr_sector*SECTOR_SIZE);
@@ -197,6 +253,19 @@ mbed_error_t    fidostorage_get_appid_slot(uint8_t const * const appid, uint32_t
             goto err;
         }
         /* let's decrypt */
+        /* we are reading buffers of crypto sector size (i.e. 4k, we must update IV each time */
+        /* calculating current IV */
+        if (fidostorate_get_iv_from_crypto_sector(curr_sector / 8, &ctx.key_h[0], &ctx.iv[0], 16)) {
+            log_printf("[fidostorage] failed to initialize IV\n");
+            errcode = MBED_ERROR_UNKNOWN;
+            goto err;
+        }
+        if (aes_init(&ctx.aes_ctx, ctx.key, AES256, &ctx.iv[0], CBC, AES_DECRYPT, AES_HARD_DMA, dma_in_complete, dma_out_complete, ctx.dma_in_desc, ctx.dma_out_desc) != 0) {
+            log_printf("[fidostorage] failed while initialize AES\n");
+            errcode = MBED_ERROR_UNKNOWN;
+            goto err;
+        }
+
         random_secure = SEC_RANDOM_NONSECURE;
         if (aes_exec(&ctx.aes_ctx, ctx.buf, ctx.buf, ctx.buflen, ctx.dma_in_desc, ctx.dma_out_desc) != 0) {
             log_printf("[fidostorage] failed while execute AES decryption\n");
@@ -285,7 +354,12 @@ mbed_error_t    fidostorage_get_appid_metadata(uint8_t const * const     appid,
 #endif
 
     /* now, let's decrypt data that has been read */
-    if (aes_init(&ctx.aes_ctx, ctx.key, AES128, ctx.iv, CTR, AES_DECRYPT, AES_HARD_DMA, dma_in_complete, dma_out_complete, ctx.dma_in_desc, ctx.dma_out_desc) != 0) {
+    if (fidostorate_get_iv_from_crypto_sector(appid_slot / 8, &ctx.key_h[0], &ctx.iv[0], 16)) {
+        log_printf("[fidostorage] failed to initialize IV\n");
+        errcode = MBED_ERROR_UNKNOWN;
+        goto err;
+    }
+    if (aes_init(&ctx.aes_ctx, ctx.key, AES256, &ctx.iv[0], CBC, AES_DECRYPT, AES_HARD_DMA, dma_in_complete, dma_out_complete, ctx.dma_in_desc, ctx.dma_out_desc) != 0) {
         log_printf("[fidostorage] failed while initialize AES\n");
         errcode = MBED_ERROR_UNKNOWN;
         goto err;

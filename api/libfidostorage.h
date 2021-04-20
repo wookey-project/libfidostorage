@@ -32,6 +32,7 @@
  * | bitmap of active sectors   | (len 1024 (two sectors))
  * |----------------------------|
  * | hmac of slotting table     | (len 512)
+ * |######## (padding) ######## | (len 512+2048)
  * |----------------------------|               \
  * | appid1|slotid1|hmac        | (len 512)     |
  * |----------------------------|               |
@@ -107,7 +108,7 @@ typedef struct __packed  __attribute__ ((aligned (4))) {
 mbed_error_t fidostorage_declare(void);
 
 /* configure buffers */
-mbed_error_t    fidostorage_configure(uint8_t *buf, uint16_t  buflen);
+mbed_error_t    fidostorage_configure(uint8_t *buf, uint16_t  buflen, uint8_t *aes_key);
 
 /* given an appid, is the appid valid (already at least registered) ? - bitmap check */
 mbed_error_t    fidostorage_appid_is_valid(uint8_t *appid);
