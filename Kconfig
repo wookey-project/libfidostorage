@@ -22,6 +22,12 @@ config USR_LIB_FIDOSTORAGE_PERFS
   ---help---
   FIDO storage access time (including (de|en)cryption time calculation and pretty printing.
 
+config USR_LIB_FIDOSTORAGE_SD_ENCRYPTION
+  bool "libfidostorage SD encryption usage"
+  default y
+  ---help---
+  FIDO storage SD encryption usage. Please leave to yes for security! Only deactivate for
+  debug purposes!
 
 endmenu
 

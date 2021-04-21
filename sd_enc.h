@@ -1,6 +1,10 @@
 #ifndef SD_ENC_H_
 #define SD_ENC_H_
 
+
+/* Declare low level stuff */
+mbed_error_t  sd_enc_declare(void);
+
 /*
  * Set the SD AES-CBC-ESSIV encryption master key.
  */
