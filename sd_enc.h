@@ -6,7 +6,9 @@
 #include "api/libfidostorage.h"
 #include "fidostorage.h"
 
-mbed_error_t sd_enc_declare(void);
+/* Declare low level stuff */
+mbed_error_t  sd_enc_declare(void);
+
 /*
  * Set the SD AES-CBC-ESSIV encryption master key.
  */
