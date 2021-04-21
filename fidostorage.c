@@ -99,7 +99,7 @@ mbed_error_t    fidostorage_configure(uint8_t *buf, uint16_t  buflen, uint8_t *a
     mbed_error_t errcode = MBED_ERROR_NONE;
     /* we wish to read from the appid table list at least 4 appid slot identifier at a time,
      * for performance constraints */
-    uint16_t minsize = 8 * SECTOR_SIZE;
+    uint16_t minsize = 4096;
 
     if (buf == NULL || buflen == 0) {
         log_printf("[fidostorage] configure: invalid params\n");
@@ -112,13 +112,7 @@ mbed_error_t    fidostorage_configure(uint8_t *buf, uint16_t  buflen, uint8_t *a
         goto err;
     }
     ctx.buf = buf;
-    ctx.buflen = buflen;
-    /* we wish to read a multiple of the fidostorage table cell content, to avoid
-     * fragmentation */
-    if (ctx.buflen % sizeof (fidostorage_appid_table_t)) {
-        /* align to word-sized below */
-        ctx.buflen -= (ctx.buflen % sizeof (fidostorage_appid_table_t));
-    }
+    ctx.buflen = 4096; /* minsize */
     /* set storage key */
     memcpy(&ctx.key[0], aes_key, AES_KEY_LEN);
     if ((errcode = set_encrypted_SD_key(aes_key, AES_KEY_LEN)) != MBED_ERROR_NONE) {
@@ -174,7 +168,7 @@ mbed_error_t    fidostorage_get_appid_slot(uint8_t const * const appid, uint32_t
     hmac_init(&hmac_ctx, &ctx.hmac_key[0], SHA256_DIGEST_SIZE, SHA256);
 
     /* we start from sector 0, to get back the bitmap and the HMAC */
-    if ((errcode = read_encrypted_SD_crypto_sectors(&ctx.buf[0], 8*SECTOR_SIZE, 0)) != MBED_ERROR_NONE) {
+    if ((errcode = read_encrypted_SD_crypto_sectors(&ctx.buf[0], ctx.buflen, 0)) != MBED_ERROR_NONE) {
         log_printf("[fidostorage] failed while reading bitmap and HMAC\n");
         goto err;
     }
@@ -196,7 +190,7 @@ mbed_error_t    fidostorage_get_appid_slot(uint8_t const * const appid, uint32_t
          * fidostorage_appid_table_t cells).
          */
 
-        if ((errcode = read_encrypted_SD_crypto_sectors(&ctx.buf[0], 8*SECTOR_SIZE, curr_sector)) != MBED_ERROR_NONE) {
+        if ((errcode = read_encrypted_SD_crypto_sectors(&ctx.buf[0], ctx.buflen, curr_sector)) != MBED_ERROR_NONE) {
             log_printf("[fidostorage] Failed during SD_enc_read, from sector %d: ret=%d\n", curr_sector, errcode);
             errcode = MBED_ERROR_RDERROR;
             goto err;
