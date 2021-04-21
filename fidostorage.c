@@ -1,48 +1,8 @@
-#include "libc/types.h"
-#include "libc/random.h"
-#include "libc/string.h"
-#include "libc/stdio.h"
-#include "libc/sync.h"
-#include "libc/random.h"
-#include "libc/arpa/inet.h"
-#include "hmac.h"
-#include "aes.h"
-#include "libsd.h"
-#include "libcryp.h"
 #include "api/libfidostorage.h"
+#include "fidostorage.h"
+#include "sd_enc.h"
 
-
-#ifdef CONFIG_USR_LIB_FIDOSTORAGE_DEBUG
-# define log_printf(...) printf(__VA_ARGS__)
-#else
-# define log_printf(...)
-#endif
-
-#define APPID_METADA_SLOT_MAX 2048
-
-
-
-
-
-typedef struct {
-    uint8_t     *buf;
-    uint16_t     buflen;
-    uint8_t      iv[16]; /* do we consider CTR with incremental iv=0 for slot=0 ? */
-    uint8_t      key[32];
-    uint8_t      key_h[32];
-    uint32_t     key_len;
-    aes_context  aes_ctx; /* aes context */
-    bool         configured;
-    /* in case of CRYP with DMA usage */
-    bool       dma_in_finished;
-    bool       dma_out_finished;
-    int        dma_in_desc;
-    int        dma_out_desc;
-    //
-    dma_shm_t dmashm_rd;
-    dma_shm_t dmashm_wr;
-} fidostorage_ctx_t;
-
+#define AES_KEY_LEN 32
 
 /**********************************************************
  * About storage structure header definition keeped private)
@@ -51,6 +11,16 @@ typedef enum {
     SLOTID_FREE     = 0x15e4f8a6UL,
     SLOTID_USED     = 0x7f180654UL
 } fidostorage_appid_table_flag_t;
+
+
+typedef struct {
+    uint8_t     *buf;
+    uint16_t     buflen;
+    uint8_t      key[AES_KEY_LEN];
+    uint32_t     key_len;
+    bool         configured;
+} fidostorage_ctx_t;
+
 
 /*
  * appid table struct
@@ -84,73 +54,6 @@ static fidostorage_ctx_t ctx = { 0 };
 
 static inline bool fidostorage_is_configured(void) {
     return (ctx.configured == true);
-}
-
-void dma_in_complete(uint8_t irq __attribute__((unused)), uint32_t status __attribute__((unused))) {
-    ctx.dma_in_finished = true;
-    request_data_membarrier();
-}
-void dma_out_complete(uint8_t irq __attribute__((unused)), uint32_t status __attribute__((unused))) {
-    ctx.dma_out_finished = true;
-    request_data_membarrier();
-}
-
-/* cryptographic sector size is 4096 */
-static mbed_error_t fidostorate_get_iv_from_crypto_sector(uint32_t sector, uint8_t *key_h, uint8_t *iv, uint32_t iv_len) {
-    mbed_error_t errcode = MBED_ERROR_NONE;
-    //
-    if (iv_len < 16) {
-        log_printf("[fidostorage] IV len to small\n");
-        errcode = MBED_ERROR_INVPARAM;
-        goto err;
-    }
-    if (iv == NULL || key_h == NULL) {
-        errcode = MBED_ERROR_INVPARAM;
-        goto err;
-    }
-    /* ESSIV is big endian */
-    uint32_t big_endian_sector_number = htonl(sector);
-    /* marshaling from uint32 to u[4] buffer */
-    uint8_t sector_number_buff[16] = { 0 };
-
-    sector_number_buff[0] = (big_endian_sector_number >> 0) & 0xff;
-    sector_number_buff[1] = (big_endian_sector_number >> 8) & 0xff;
-    sector_number_buff[2] = (big_endian_sector_number >> 16) & 0xff;
-    sector_number_buff[3] = (big_endian_sector_number >> 24) & 0xff;
-
-
-    /* create ESSIV from sector id */
-    if (aes_init(&ctx.aes_ctx, key_h, AES256, NULL, ECB, AES_ENCRYPT, AES_SOFT_UNMASKED, NULL, NULL, -1, -1)) {
-        errcode = MBED_ERROR_UNKNOWN;
-        goto err;
-    }
-    /* and encrypt sector in AES-ECB */
-    if (aes_exec(&ctx.aes_ctx, sector_number_buff, iv, iv_len, -1, -1)) {
-        errcode = MBED_ERROR_UNKNOWN;
-        goto err;
-    }
-err:
-    return errcode;
-}
-
-static mbed_error_t fidostorage_get_key_from_master(uint8_t *master, uint8_t *key_h, uint32_t *keylen) {
-    mbed_error_t errcode = MBED_ERROR_NONE;
-
-    if (master == NULL || key_h == NULL || keylen == NULL) {
-        errcode = MBED_ERROR_INVPARAM;
-        goto err;
-    }
-    // K = SHA-256("ENCRYPTION"+K_M)
-    const char *encryption = "ENCRYPTION";
-    sha256_context sha256_ctx;
-    sha256_init(&sha256_ctx);
-    sha256_update(&sha256_ctx, (const unsigned char*)encryption, 10);
-    sha256_update(&sha256_ctx, master, 32);
-    sha256_final(&sha256_ctx, key_h);
-    *keylen = 32;
-
-err:
-    return errcode;
 }
 
 
