@@ -87,6 +87,7 @@ err:
 mbed_error_t fidostorage_declare(void)
 {
     mbed_error_t errcode = MBED_ERROR_NONE;
+    errcode = sd_enc_declare();
     return errcode;
 }
 
