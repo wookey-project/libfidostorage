@@ -18,6 +18,7 @@
 
 /* A "cryptographic" sector size */
 #define CRYPTO_SECTOR_SIZE 4096
+#define SD_SECTOR_SIZE 512
 
 
 /**************************** DO NOT USE SD ENCRYPTION ****************************/
@@ -40,7 +41,7 @@ mbed_error_t read_encrypted_SD_crypto_sectors(uint8_t *buff_out, uint32_t buff_l
     mbed_error_t errcode = MBED_ERROR_NONE;
     int ret;
     if ((ret = sd_read((uint32_t*)buff_out, sector_num*8, buff_len)) != SD_SUCCESS) {
-        log_printf("[fidostorage] Failed during SD_read, from sector %d, %d words to be read: ret=%d\n", sector_num*8, buff_len/4, ret);
+        log_printf("[fidostorage] Failed during SD_read, from sector %d, %d words to be read: ret=%d\n", sector_num * (CRYPTO_SECTOR_SIZE / SD_SECTOR_SIZE), buff_len, ret);
         errcode = MBED_ERROR_RDERROR;
         goto err;
     }
@@ -56,7 +57,7 @@ mbed_error_t write_encrypted_SD_crypto_sectors(const uint8_t *buff_in, uint32_t 
     mbed_error_t errcode = MBED_ERROR_NONE;
     int ret;
     if ((ret = sd_write((uint32_t*)buff_in, sector_num*8, buff_len)) != SD_SUCCESS) {
-        log_printf("[fidostorage] Failed during SD_write, to sector %d, %d words to be write: ret=%d\n", sector_num*8, buff_len/4, ret);
+        log_printf("[fidostorage] Failed during SD_write, to sector %d, %d words to be write: ret=%d\n", sector_num * (CRYPTO_SECTOR_SIZE / SD_SECTOR_SIZE), buff_len, ret);
         errcode = MBED_ERROR_RDERROR;
         goto err;
     }
