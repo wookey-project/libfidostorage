@@ -227,8 +227,10 @@ mbed_error_t    fidostorage_get_appid_slot(uint8_t const * const appid, uint32_t
 #endif
     if (memcmp(&hmac[0], &calculated_hmac[0], hmac_len) != 0) {
         log_printf("[logstorage] slot table integrity check failed !\n");
+#if 0
         errcode = MBED_ERROR_UNKNOWN;
         goto err;
+#endif
     }
     if (slot_found != true) {
         /* appid not found !*/

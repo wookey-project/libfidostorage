@@ -1,6 +1,12 @@
 #ifndef SD_ENC_H_
 #define SD_ENC_H_
 
+#include "autoconf.h"
+#include "libc/types.h"
+#include "api/libfidostorage.h"
+#include "fidostorage.h"
+
+mbed_error_t sd_enc_declare(void);
 /*
  * Set the SD AES-CBC-ESSIV encryption master key.
  */
