@@ -1,4 +1,5 @@
 #include "libc/nostd.h"
+#include "libc/string.h"
 #include "api/libfidostorage.h"
 #include "fidostorage.h"
 #include "sd_enc.h"
@@ -70,11 +71,13 @@ static inline mbed_error_t fidostorage_get_hmac_key_from_master(uint8_t *master,
     const char *integrity = "INTEGRITY";
     sha256_context sha256_ctx;
     sha256_init(&sha256_ctx);
-    sha256_update(&sha256_ctx, (const unsigned char*)integrity, 10);
+    sha256_update(&sha256_ctx, (const unsigned char*)integrity, strlen(integrity));
     sha256_update(&sha256_ctx, master, 32);
     sha256_final(&sha256_ctx, key_h);
     *keylen = 32;
 
+    printf("HMAC key is: ");
+    hexdump(key_h, 32);
 err:
     return errcode;
 }
