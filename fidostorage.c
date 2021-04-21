@@ -99,8 +99,10 @@ mbed_error_t    fidostorage_configure(uint8_t *buf, uint16_t  buflen, uint8_t *a
         ctx.buflen -= (ctx.buflen % sizeof (fidostorage_appid_table_t));
     }
     /* set storage key */
-    memcpy(&ctx.key[0], aes_key, 32);
-    fidostorage_get_key_from_master(aes_key, &ctx.key_h[0], &ctx.key_len);
+    memcpy(&ctx.key[0], aes_key, AES_KEY_LEN);
+    if ((errcode = set_encrypted_SD_key(aes_key, AES_KEY_LEN)) != MBED_ERROR_NONE) {
+        goto err;
+    }
     ctx.configured = true;
     request_data_membarrier();
 err:
