@@ -20,6 +20,22 @@
 #define CRYPTO_SECTOR_SIZE 4096
 #define SD_SECTOR_SIZE 512
 
+static uint32_t SD_capacity = 0;
+static int check_SD_overflow(uint32_t sector_num, uint32_t buff_len)
+{
+	if(SD_capacity == 0){
+		SD_capacity = sd_get_capacity();
+	}
+	/* Sanity check that we do not overflow the SD card capacity */
+	if((sector_num + (buff_len / SECTOR_SIZE)) > (SD_capacity / 1024)){
+		goto err;
+	}
+
+	return 0;
+err:
+	return -1;
+}
+
 
 /**************************** DO NOT USE SD ENCRYPTION ****************************/
 #ifndef CONFIG_USR_LIB_FIDOSTORAGE_SD_ENCRYPTION 
@@ -40,7 +56,12 @@ mbed_error_t read_encrypted_SD_crypto_sectors(uint8_t *buff_out, uint32_t buff_l
 {
     mbed_error_t errcode = MBED_ERROR_NONE;
     int ret;
-    if ((ret = sd_read((uint32_t*)buff_out, sector_num*8, buff_len)) != SD_SUCCESS) {
+    if(check_SD_overflow(sector_num, buff_len)){
+  	errcode = MBED_ERROR_INVPARAM;
+	goto err;
+    }
+
+    if ((ret = sd_read((uint32_t*)buff_out, sector_num * (CRYPTO_SECTOR_SIZE / SD_SECTOR_SIZE), buff_len)) != SD_SUCCESS) {
         log_printf("[fidostorage] Failed during SD_read, from sector %d, %d words to be read: ret=%d\n", sector_num * (CRYPTO_SECTOR_SIZE / SD_SECTOR_SIZE), buff_len, ret);
         errcode = MBED_ERROR_RDERROR;
         goto err;
@@ -56,7 +77,12 @@ mbed_error_t write_encrypted_SD_crypto_sectors(const uint8_t *buff_in, uint32_t 
 {
     mbed_error_t errcode = MBED_ERROR_NONE;
     int ret;
-    if ((ret = sd_write((uint32_t*)buff_in, sector_num*8, buff_len)) != SD_SUCCESS) {
+    if(check_SD_overflow(sector_num, buff_len)){
+  	errcode = MBED_ERROR_INVPARAM;
+	goto err;
+    }
+
+    if ((ret = sd_write((uint32_t*)buff_in, sector_num * (CRYPTO_SECTOR_SIZE / SD_SECTOR_SIZE), buff_len)) != SD_SUCCESS) {
         log_printf("[fidostorage] Failed during SD_write, to sector %d, %d words to be write: ret=%d\n", sector_num * (CRYPTO_SECTOR_SIZE / SD_SECTOR_SIZE), buff_len, ret);
         errcode = MBED_ERROR_RDERROR;
         goto err;
@@ -69,22 +95,24 @@ err:
 #else
 
 /* CRYP DMA callback routines */
+static volatile bool dma_in_finished = false;
 static void dma_in_complete(uint8_t irq __attribute__((unused)), uint32_t status __attribute__((unused))) {
-    ctx.dma_in_finished = true;
+    dma_in_finished = true;
     request_data_membarrier();
 }
+static volatile bool dma_out_finished = false;
 static void dma_out_complete(uint8_t irq __attribute__((unused)), uint32_t status __attribute__((unused))) {
-    ctx.dma_out_finished = true;
+    dma_out_finished = true;
     request_data_membarrier();
 }
 /* CRYP DMA descriptors */
-static volatile int dma_in_desc, dma_out_desc;
+static volatile int dma_in_desc = -1, dma_out_desc = -1;
 
 /* Declare low level stuff */
 mbed_error_t sd_enc_declare(void)
 {
 	mbed_error_t errcode = MBED_ERROR_NONE;
-	errcode = cryp_early_init(true, CRYP_MAP_AUTO, CRYP_CFG, &dma_in_desc, &dma_out_desc);
+	errcode = cryp_early_init(true, CRYP_MAP_AUTO, CRYP_CFG, (int*)&dma_in_desc, (int*)&dma_out_desc);
 	request_data_membarrier();
 	return errcode;
 }
@@ -98,7 +126,7 @@ static mbed_error_t aes_cbc_essiv_derive_iv(uint32_t sector, uint8_t *key_h, uin
 	mbed_error_t errcode = MBED_ERROR_NONE;
 	aes_context  aes_ctx;
 
-	if((key_h == NULL) || (key_h_len != 32) || (iv == NULL) || (iv_len != 16)){
+	if((key_h == NULL) || (key_h_len != 32) || (iv == NULL) || (iv_len != 16)){
 		errcode = MBED_ERROR_INVPARAM;
 		goto err;
 	}
@@ -136,17 +164,6 @@ static uint8_t AES_CBC_ESSIV_hkey[32] = { 0 };
 
 
 /**********************/
-static uint32_t SD_capacity = 0;
-static int check_SD_overflow(uint32_t sector_num, uint32_t buff_len)
-{
-	if(SD_capacity == 0){
-		SD_capacity = sd_get_capacity();
-	}
-	/* Sanity check that we do not overflow */
-	uint64_t 
-
-}
-
 /*
  * Set the SD AES-CBC-ESSIV encryption master key.
  */
@@ -177,13 +194,20 @@ err:
 mbed_error_t read_encrypted_SD_crypto_sectors(uint8_t *buff_out, uint32_t buff_len, uint32_t sector_num)
 {
 	mbed_error_t errcode = MBED_ERROR_NONE;
+	int ret;
 	/* Sanity checks */
 	if(buff_out == NULL){
 		errcode = MBED_ERROR_INVPARAM;
 		goto err;
 	}
-	if(SD_capacity == 0){
-		SD_capacity = sd_get_capacity();
+	if(check_SD_overflow(sector_num, buff_len)){
+		errcode = MBED_ERROR_INVPARAM;
+		goto err;
+	}
+        if ((ret = sd_read((uint32_t*)buff_out, sector_num * (CRYPTO_SECTOR_SIZE / SD_SECTOR_SIZE), buff_len)) != SD_SUCCESS) {
+ 		log_printf("[fidostorage] Failed during SD_read, from sector %d, %d words to be read: ret=%d\n", sector_num * (CRYPTO_SECTOR_SIZE / SD_SECTOR_SIZE), buff_len, errcode);
+		errcode = MBED_ERROR_RDERROR;
+		goto err;
 	}
 
 err:
@@ -196,9 +220,21 @@ err:
 mbed_error_t write_encrypted_SD_crypto_sectors(const uint8_t *buff_in, uint32_t buff_len, uint32_t sector_num)
 {
 	mbed_error_t errcode = MBED_ERROR_NONE;
+	int ret;
 	/* Sanity checks */
 	if(buff_in == NULL){
 		errcode = MBED_ERROR_INVPARAM;
+		goto err;
+	}
+	if(check_SD_overflow(sector_num, buff_len)){
+		errcode = MBED_ERROR_INVPARAM;
+		goto err;
+	}
+
+
+	if ((ret = sd_write((uint32_t*)buff_in, sector_num * (CRYPTO_SECTOR_SIZE / SD_SECTOR_SIZE), buff_len)) != SD_SUCCESS) {
+		log_printf("[fidostorage] Failed during SD_write, to sector %d, %d words to be write: ret=%d\n", sector_num * (CRYPTO_SECTOR_SIZE / SD_SECTOR_SIZE), buff_len, errcode);
+		errcode = MBED_ERROR_RDERROR;
 		goto err;
 	}
 

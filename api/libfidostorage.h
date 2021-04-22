@@ -70,16 +70,14 @@
  * table.
  */
 
-/* deprecated */
-#define MAX_APPID_TABLE_LEN 4000000UL /* 4MB */
-
 /* standard SD Card sector size */
 #define SECTOR_SIZE 512
 
-/* 8192 slots max */
-#define SLOT_NUM (16*SECTOR_SIZE)
-
 #define SLOT_SIZE 4096
+
+/* 8192 slots max */
+#define SLOT_NUM 8192
+
 
 
 typedef enum {
