@@ -268,11 +268,15 @@ static mbed_error_t crypt_do_dma_buff(const uint8_t *buff_in, uint8_t *buff_out,
 		}
 
 		if(aes_essiv_last_dir != dir){
-			aes_essiv_last_dir = dir;
                         cryp_wait_for_emtpy_fifos();
 			/* Inject our key in CRYP */
-			cryp_set_mode(AES_KEY_PREPARE);
-			cryp_init_injector(AES_CBC_ESSIV_key, KEY_256);
+			if((aes_essiv_last_dir == AES_ESSIV_ENCRYPT) || ((aes_essiv_last_dir == AES_ESSIV_NONE) && (dir == AES_ESSIV_DECRYPT))){
+				cryp_set_mode(AES_KEY_PREPARE);
+			}
+			else{
+				cryp_init_injector(AES_CBC_ESSIV_key, KEY_256);
+			}	
+			aes_essiv_last_dir = dir;
 		}
 
 		/* Encrypt the buffer "in place" */
