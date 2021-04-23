@@ -22,7 +22,7 @@ mbed_error_t read_encrypted_SD_crypto_sectors(uint8_t *buff_out, uint32_t buff_l
 /* Write clear data from the input buffer and put encrypted data on SD from sector_number.
  * Note: the sector number is a "cryptographic" sector of 4096 bytes.
  */
-mbed_error_t write_encrypted_SD_crypto_sectors(const uint8_t *buff_in, uint32_t buff_len, uint32_t sector_num);
+mbed_error_t write_encrypted_SD_crypto_sectors(uint8_t *buff_in, uint32_t buff_len, uint32_t sector_num);
 
 
 #endif /* SD_ENC_H_ */

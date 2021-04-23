@@ -60,7 +60,6 @@ mbed_error_t read_encrypted_SD_crypto_sectors(uint8_t *buff_out, uint32_t buff_l
   	errcode = MBED_ERROR_INVPARAM;
 	goto err;
     }
-
     if ((ret = sd_read((uint32_t*)buff_out, sector_num * (CRYPTO_SECTOR_SIZE / SD_SECTOR_SIZE), buff_len)) != SD_SUCCESS) {
         log_printf("[fidostorage] Failed during SD_read, from sector %d, %d words to be read: ret=%d\n", sector_num * (CRYPTO_SECTOR_SIZE / SD_SECTOR_SIZE), buff_len, ret);
         errcode = MBED_ERROR_RDERROR;
@@ -73,7 +72,7 @@ err:
 /* Write clear data from the input buffer and put encrypted data on SD from sector_number.
  * Note: the sector number is a "cryptographic" sector of 4096 bytes.
  */
-mbed_error_t write_encrypted_SD_crypto_sectors(const uint8_t *buff_in, uint32_t buff_len, uint32_t sector_num)
+mbed_error_t write_encrypted_SD_crypto_sectors(uint8_t *buff_in, uint32_t buff_len, uint32_t sector_num)
 {
     mbed_error_t errcode = MBED_ERROR_NONE;
     int ret;
@@ -95,13 +94,61 @@ err:
 #else
 
 /* CRYP DMA callback routines */
+typedef struct {
+    bool dmain_done;
+    bool dmain_hdone;
+    bool dmain_fifo_err;
+    bool dmain_dm_err;
+    bool dmain_tr_err;
+    bool dmaout_done;
+    bool dmaout_hdone;
+    bool dmaout_fifo_err;
+    bool dmaout_dm_err;
+    bool dmaout_tr_err;
+} status_reg_t;
+
 static volatile bool dma_in_finished = false;
-static void dma_in_complete(uint8_t irq __attribute__((unused)), uint32_t status __attribute__((unused))) {
+static volatile status_reg_t status_reg = { 0 };
+
+static void dma_in_complete(uint8_t irq __attribute__((unused)), uint32_t status) {
+    if (status & DMA_FIFO_ERROR) {
+        status_reg.dmain_fifo_err = true;
+    }
+    if (status & DMA_DIRECT_MODE_ERROR) {
+        status_reg.dmain_dm_err = true;
+    }
+    if (status & DMA_TRANSFER_ERROR) {
+        status_reg.dmain_tr_err = true;
+    }
+    if (status & DMA_HALF_TRANSFER) {
+        status_reg.dmain_hdone = true;
+    }
+    if (status & DMA_TRANSFER) {
+        status_reg.dmain_done = true;
+    }
+
     dma_in_finished = true;
     request_data_membarrier();
 }
 static volatile bool dma_out_finished = false;
-static void dma_out_complete(uint8_t irq __attribute__((unused)), uint32_t status __attribute__((unused))) {
+static void dma_out_complete(uint8_t irq __attribute__((unused)), uint32_t status) {
+
+    if (status & DMA_FIFO_ERROR) {
+        status_reg.dmaout_fifo_err = true;
+    }
+    if (status & DMA_DIRECT_MODE_ERROR) {
+        status_reg.dmaout_dm_err = true;
+    }
+    if (status & DMA_TRANSFER_ERROR) {
+        status_reg.dmaout_tr_err = true;
+    }
+    if (status & DMA_HALF_TRANSFER) {
+        status_reg.dmaout_hdone = true;
+    }
+    if (status & DMA_TRANSFER) {
+        status_reg.dmaout_done = true;
+    }
+
     dma_out_finished = true;
     request_data_membarrier();
 }
@@ -140,7 +187,6 @@ static mbed_error_t aes_cbc_essiv_derive_iv(uint32_t sector, uint8_t *key_h, uin
 	sector_number_buff[1] = (big_endian_sector_number >> 8) & 0xff;
 	sector_number_buff[2] = (big_endian_sector_number >> 16) & 0xff;
 	sector_number_buff[3] = (big_endian_sector_number >> 24) & 0xff;
-
 	/* Now create the ESSIV IV from sector number */
 	if (aes_init(&aes_ctx, key_h, AES256, NULL, ECB, AES_ENCRYPT, AES_SOFT_UNMASKED, NULL, NULL, -1, -1)) {
 		errcode = MBED_ERROR_UNKNOWN;
@@ -162,6 +208,13 @@ static uint8_t AES_CBC_ESSIV_key[32]  = { 0 };
 /* AES-CBC-ESSIV master key hash */
 static uint8_t AES_CBC_ESSIV_hkey[32] = { 0 };
 
+typedef enum {
+	AES_ESSIV_NONE    = 0,
+	AES_ESSIV_ENCRYPT = 1,
+	AES_ESSIV_DECRYPT = 2,
+} switch_dir;
+
+static volatile switch_dir aes_essiv_last_dir = AES_ESSIV_NONE;
 
 /**********************/
 /*
@@ -184,9 +237,85 @@ mbed_error_t set_encrypted_SD_key(const uint8_t *key, uint32_t key_len)
 	sha256_update(&sha256_ctx, key, key_len);
 	sha256_final(&sha256_ctx, AES_CBC_ESSIV_hkey);
 
+	/* Initialize our CRYP in DMA mode */
+	cryp_init_dma(dma_in_complete, dma_out_complete, dma_in_desc, dma_out_desc);
+
 err:
 	return errcode;
 }
+
+static mbed_error_t crypt_do_dma_buff(const uint8_t *buff_in, uint8_t *buff_out, uint32_t buff_len, uint32_t sector_num, switch_dir dir)
+{
+	/* Encrypt the buffer in place */
+	mbed_error_t errcode = MBED_ERROR_NONE;
+	uint32_t i_sector, total_sectors;
+
+	if((buff_in == NULL) || (buff_out == NULL)){
+		errcode = MBED_ERROR_INVPARAM;
+		goto err;
+	}
+
+	total_sectors = (buff_len / CRYPTO_SECTOR_SIZE);
+	if((buff_len % CRYPTO_SECTOR_SIZE) != 0){
+		total_sectors += 1;
+	}
+	/* Do our AES-CBC-ESSIV for all the sectors */
+	for(i_sector = 0; i_sector < total_sectors; i_sector++){
+		uint8_t iv[16];
+		/* Derive the CBC-ESSIV IV */
+		if((errcode = aes_cbc_essiv_derive_iv(sector_num + i_sector, AES_CBC_ESSIV_hkey, sizeof(AES_CBC_ESSIV_hkey), iv, sizeof(iv))) != MBED_ERROR_NONE){
+			goto err;
+		}
+
+		if(aes_essiv_last_dir != dir){
+			aes_essiv_last_dir = dir;
+                        cryp_wait_for_emtpy_fifos();
+			/* Inject our key in CRYP */
+			cryp_set_mode(AES_KEY_PREPARE);
+			cryp_init_injector(AES_CBC_ESSIV_key, KEY_256);
+		}
+
+		/* Encrypt the buffer "in place" */
+		if(dir == AES_ESSIV_ENCRYPT){
+			cryp_init_user(KEY_256, iv, sizeof(iv), AES_CBC, ENCRYPT);
+		}
+		else if (dir == AES_ESSIV_DECRYPT){
+			cryp_init_user(KEY_256, iv, sizeof(iv), AES_CBC, DECRYPT);
+		}
+		else{
+			errcode = MBED_ERROR_INVPARAM;
+			goto err;
+		}
+
+		uint32_t size = CRYPTO_SECTOR_SIZE;
+		if(((i_sector + 1) * CRYPTO_SECTOR_SIZE) > buff_len){
+			size = buff_len % CRYPTO_SECTOR_SIZE;
+		}
+DMA_XFR_AGAIN:
+		dma_in_finished = dma_out_finished = false;
+                status_reg.dmain_fifo_err = status_reg.dmain_dm_err = status_reg.dmain_tr_err = false;
+                status_reg.dmaout_fifo_err = status_reg.dmaout_dm_err = status_reg.dmaout_tr_err = false;
+
+		const uint8_t *curr_buff_in = buff_in + (i_sector * CRYPTO_SECTOR_SIZE);
+		uint8_t *curr_buff_out = buff_out + (i_sector * CRYPTO_SECTOR_SIZE);
+		cryp_do_dma((const uint8_t *) curr_buff_in, (uint8_t *) curr_buff_out, size, dma_in_desc, dma_out_desc);
+
+		/* Wait for DMA ending */
+		while(dma_out_finished == false){
+			bool dma_error = status_reg.dmaout_fifo_err || status_reg.dmaout_dm_err || status_reg.dmaout_tr_err;
+			if (dma_error == true) {
+				cryp_flush_fifos();
+				goto DMA_XFR_AGAIN;
+			}
+		}
+		cryp_wait_for_emtpy_fifos();
+		dma_in_finished = dma_out_finished = false;
+        }
+
+err:
+	return errcode;
+}
+
 
 /* Read encrypted data from a sector_number and put the decrypted data in the buffer.
  * Note: the sector number is a "cryptographic" sector of 4096 bytes.
@@ -210,6 +339,11 @@ mbed_error_t read_encrypted_SD_crypto_sectors(uint8_t *buff_out, uint32_t buff_l
 		goto err;
 	}
 
+	/* Decrypt the buffer in place */
+	if((errcode = crypt_do_dma_buff(buff_out, buff_out, buff_len, sector_num, AES_ESSIV_DECRYPT)) != MBED_ERROR_NONE){
+		goto err;
+	}
+
 err:
 	return errcode;
 }
@@ -217,7 +351,7 @@ err:
 /* Write clear data from the input buffer and put encrypted data on SD from sector_number.
  * Note: the sector number is a "cryptographic" sector of 4096 bytes.
  */
-mbed_error_t write_encrypted_SD_crypto_sectors(const uint8_t *buff_in, uint32_t buff_len, uint32_t sector_num)
+mbed_error_t write_encrypted_SD_crypto_sectors(uint8_t *buff_in, uint32_t buff_len, uint32_t sector_num)
 {
 	mbed_error_t errcode = MBED_ERROR_NONE;
 	int ret;
@@ -231,7 +365,12 @@ mbed_error_t write_encrypted_SD_crypto_sectors(const uint8_t *buff_in, uint32_t 
 		goto err;
 	}
 
+	/* Encrypt the buffer in place */
+	if((errcode = crypt_do_dma_buff(buff_in, buff_in, buff_len, sector_num, AES_ESSIV_ENCRYPT)) != MBED_ERROR_NONE){
+		goto err;
+	}
 
+	/* Data are encrypted, now write them on the SD card */
 	if ((ret = sd_write((uint32_t*)buff_in, sector_num * (CRYPTO_SECTOR_SIZE / SD_SECTOR_SIZE), buff_len)) != SD_SUCCESS) {
 		log_printf("[fidostorage] Failed during SD_write, to sector %d, %d words to be write: ret=%d\n", sector_num * (CRYPTO_SECTOR_SIZE / SD_SECTOR_SIZE), buff_len, errcode);
 		errcode = MBED_ERROR_RDERROR;
