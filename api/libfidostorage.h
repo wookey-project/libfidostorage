@@ -83,6 +83,7 @@
 typedef enum {
     ICON_TYPE_IMAGE = 0,
     ICON_TYPE_COLOR = 1,
+    ICON_TYPE_NONE = 2
 } fidostorage_icon_type_t;
 
 /*
@@ -90,7 +91,7 @@ typedef enum {
  */
 typedef union {
     uint8_t                 rgb_color[3];
-    uint8_t                 icon_data[SLOT_SIZE - 104]; /*< padding to appid slot size */
+    uint8_t                 icon_data[0];
 } fidostorage_icon_data_t;
 
 /*
