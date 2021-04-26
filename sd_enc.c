@@ -254,7 +254,11 @@ static mbed_error_t crypt_do_dma_buff(const uint8_t *buff_in, uint8_t *buff_out,
 		errcode = MBED_ERROR_INVPARAM;
 		goto err;
 	}
-
+	if((buff_len) % 16 != 0){
+		/* AES expects multiple of blocks size */
+		errcode = MBED_ERROR_INVPARAM;
+		goto err;
+	}
 	total_sectors = (buff_len / CRYPTO_SECTOR_SIZE);
 	if((buff_len % CRYPTO_SECTOR_SIZE) != 0){
 		total_sectors += 1;
@@ -272,6 +276,7 @@ static mbed_error_t crypt_do_dma_buff(const uint8_t *buff_in, uint8_t *buff_out,
 			/* Inject our key in CRYP */
 			if((aes_essiv_last_dir == AES_ESSIV_ENCRYPT) || ((aes_essiv_last_dir == AES_ESSIV_NONE) && (dir == AES_ESSIV_DECRYPT))){
 				cryp_set_mode(AES_KEY_PREPARE);
+				cryp_init_injector(AES_CBC_ESSIV_key, KEY_256);
 			}
 			else{
 				cryp_init_injector(AES_CBC_ESSIV_key, KEY_256);

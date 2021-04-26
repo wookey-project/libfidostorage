@@ -146,6 +146,6 @@ mbed_error_t    fidostorage_get_appid_metadata(uint8_t const * const     appid,
 
 mbed_error_t    fidostorage_register_appid(uint8_t const * const appid, uint32_t  * const appid_slot);
 
-mbed_error_t    fidostorage_set_appid_metada(uint8_t *appid, uint32_t   appid_slot, fidostorage_appid_slot_t const * const metadata);
+mbed_error_t    fidostorage_set_appid_metada(uint32_t  *slotid, fidostorage_appid_slot_t const * const metadata);
 
 #endif/*!LIBFIDOSTORAGE_H_*/
