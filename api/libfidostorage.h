@@ -83,9 +83,9 @@
 
 
 typedef enum {
-    ICON_TYPE_IMAGE = 0,
+    ICON_TYPE_NONE = 0,
     ICON_TYPE_COLOR = 1,
-    ICON_TYPE_NONE = 2
+    ICON_TYPE_IMAGE = 2,
 } fidostorage_icon_type_t;
 
 /*
@@ -165,15 +165,15 @@ static inline void            fidostorage_dump_slot(fidostorage_appid_slot_t *mt
     printf("|--> CTR:        %d\n", mt->ctr);
     printf("|--> icon_len:   %d\n", mt->icon_len);
     switch(mt->icon_type){
-        case 0:
+        case ICON_TYPE_NONE:
             printf("|--> icon_type:  NONE\n");
             break;
-        case 1:
+        case ICON_TYPE_COLOR:
             printf("|--> icon_type:  RGB\n");
             printf("|--> color:      0x%x 0x%x 0x%x\n",
                     mt->icon.rgb_color[0], mt->icon.rgb_color[1], mt->icon.rgb_color[2]);
             break;
-        case 2:
+        case ICON_TYPE_IMAGE:
             printf("|--> icon_type:  IMG\n");
             break;
         default:
