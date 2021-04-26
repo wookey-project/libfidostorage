@@ -24,6 +24,8 @@
 #ifndef LIBFIDOSTORAGE_H_
 #define LIBFIDOSTORAGE_H_
 
+#include "libc/stdio.h"
+#include "libc/nostd.h"
 /*
  * How it works:
  *
@@ -148,5 +150,39 @@ mbed_error_t    fidostorage_get_appid_metadata(uint8_t const * const     appid,
 mbed_error_t    fidostorage_register_appid(uint8_t const * const appid, uint32_t  * const appid_slot);
 
 mbed_error_t    fidostorage_set_appid_metada(uint32_t  *slotid, fidostorage_appid_slot_t const * const metadata);
+
+/*@
+  @ requires \valid_read(mt);
+  */
+static inline void            fidostorage_dump_slot(fidostorage_appid_slot_t *mt __attribute__((unused)))
+{
+#if CONFIG_USR_LIB_FIDOSTORAGE_DEBUG
+    printf("--- appid metadata------\n");
+    printf("|--> appid:      ");
+    hexdump(mt->appid, 32);
+    printf("|--> name:       %s\n", mt->name);
+    printf("|--> flags:      %x\n", mt->flags);
+    printf("|--> CTR:        %d\n", mt->ctr);
+    printf("|--> icon_len:   %d\n", mt->icon_len);
+    switch(mt->icon_type){
+        case 0:
+            printf("|--> icon_type:  NONE\n");
+            break;
+        case 1:
+            printf("|--> icon_type:  RGB\n");
+            printf("|--> color:      0x%x 0x%x 0x%x\n",
+                    mt->icon.rgb_color[0], mt->icon.rgb_color[1], mt->icon.rgb_color[2]);
+            break;
+        case 2:
+            printf("|--> icon_type:  IMG\n");
+            break;
+        default:
+            printf("|--> icon_type:  UNKOWN\n");
+            break;
+    }
+#endif
+}
+
+
 
 #endif/*!LIBFIDOSTORAGE_H_*/

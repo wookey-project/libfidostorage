@@ -245,6 +245,7 @@ err:
 
 static uint8_t shadow_bitmap[1024 + 8 + 32] = { 0 };
 
+
 /* appid is 32 bytes len identifier */
 mbed_error_t    fidostorage_get_appid_slot(uint8_t const * const appid, uint32_t *slotid, uint8_t *hmac)
 {
@@ -413,7 +414,7 @@ mbed_error_t    fidostorage_get_appid_metadata(uint8_t const * const     appid,
     if (memcmp(appid, mt->appid, 32) != 0) {
         log_printf("[fidostorage] metadata of slotid = 0x%x does not correspond to the correct appid\n", slotid);
         hexdump(appid, 32);
-        hexdump(mt->appid, 32);        
+        hexdump(mt->appid, 32);
         errcode = MBED_ERROR_INVPARAM;
         goto err;
     }
@@ -449,28 +450,8 @@ mbed_error_t    fidostorage_get_appid_metadata(uint8_t const * const     appid,
         errcode = MBED_ERROR_INVSTATE;
         goto err;
     }
-
     log_printf("[fidostorage] appid metadata valid !\n");
-    log_printf("|--> appid: \n");
-    hexdump(mt->appid, 32);
-    log_printf("|--> flags:      %x\n", mt->flags);
-    log_printf("|--> name:       %s\n", mt->name);
-    log_printf("|--> CTR:        %d\n", mt->ctr);
-    log_printf("|--> icon_len:   %d\n", mt->icon_len);
-    switch(mt->icon_type){
-        case 0:
-            log_printf("|--> icon_type:  NONE\n");
-            break;
-        case 1:
-            log_printf("|--> icon_type:  RGB\n");
-            break;
-        case 2:
-            log_printf("|--> icon_type:  IMG\n");
-            break;
-        default:
-            log_printf("|--> icon_type:  UNKOWN\n");
-            break;       
-    }
+    fidostorage_dump_slot(mt);
 err:
 #if CONFIG_USR_LIB_FIDOSTORAGE_PERFS
     sys_get_systick(&ms2, PREC_MILLI);
@@ -514,7 +495,7 @@ mbed_error_t    fidostorage_set_appid_metada(uint32_t  *slotid, fidostorage_appi
         log_printf("Calculated HMAC of slot:\n");
         hexdump(hmac_slot, hmac_len);
 #endif
-    }  
+    }
     /* First, read our first header sector */
     if ((errcode = read_encrypted_SD_crypto_sectors(&ctx.buf[0], SLOT_SIZE, 0)) != MBED_ERROR_NONE) {
         log_printf("[fidostorage] Failed during SD_enc_read, from sector %d: ret=%d\n", 0, errcode);
@@ -553,7 +534,7 @@ mbed_error_t    fidostorage_set_appid_metada(uint32_t  *slotid, fidostorage_appi
         set_slot_active(curr_slotnum, shadow_bitmap);
     }
 
-    /* Write the slot content */    
+    /* Write the slot content */
     /* TODO: better size handling */
     memset(&ctx.buf[0], 0, ctx.buflen); /* Write zeros to the slot is asked to remove */
     if(metadata != NULL){
@@ -593,7 +574,7 @@ mbed_error_t    fidostorage_set_appid_metada(uint32_t  *slotid, fidostorage_appi
             goto err;
         }
         uint16_t numcell = 8; /* there are 8 cells per 4k read (512 bytes per cell) */
-        
+
         fidostorage_appid_table_t   *appid_table = (fidostorage_appid_table_t*)&ctx.buf[0];
         bool to_write = false;
         for (uint16_t j = 0; j < numcell; j++) {
@@ -616,7 +597,7 @@ mbed_error_t    fidostorage_set_appid_metada(uint32_t  *slotid, fidostorage_appi
                 errcode = MBED_ERROR_RDERROR;
                 goto err;
             }
-        } 
+        }
     }
     /* Finalize HMAC computation */
     hmac_len = 32;
@@ -628,7 +609,7 @@ mbed_error_t    fidostorage_set_appid_metada(uint32_t  *slotid, fidostorage_appi
         log_printf("[fidostorage] Failed during SD_enc_write, from sector %d: ret=%d\n", 0, errcode);
         errcode = MBED_ERROR_RDERROR;
         goto err;
-    } 
+    }
 
 err:
     return errcode;
