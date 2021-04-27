@@ -97,6 +97,22 @@ typedef union {
 } fidostorage_icon_data_t;
 
 /*
+ *_fields_ = [
+            ('width', c_uint32),
+            ('height', c_uint32),
+            ('nbcoul', c_uint32),
+            ('colormap', c_uint8 * (3 * nbcoul)),
+            ('nbdata', c_uint32),
+            ('data', c_uint8 * (2 * nbdata)),
+            ]
+*/
+typedef struct __packed {
+    uint32_t    width;
+    uint32_t    height;
+    uint32_t    nbcoul;
+    uint8_t     colormap[0]; /* dynamic, based on nbcoul*/
+} rle_icon_t;
+/*
  * The effective appid information structure
  */
 typedef struct __packed  __attribute__ ((aligned (4))) {
