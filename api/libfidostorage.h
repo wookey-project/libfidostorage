@@ -91,7 +91,7 @@ typedef enum {
 /*
  * An icon is one of the following (depending on icon type): RGB color, or effective icon
  */
-typedef union {
+typedef union __packed {
     uint8_t                 rgb_color[3];
     uint8_t                 icon_data[0];
 } fidostorage_icon_data_t;
@@ -101,14 +101,17 @@ typedef union {
  */
 typedef struct __packed  __attribute__ ((aligned (4))) {
     uint8_t     appid[32];              /*< application identifier */
+    uint8_t     kh[32];                 /*< Appid associated keyhandle hash */
     uint32_t    flags;                  /*< various U2F2 specific flags */
     uint8_t     name[60];               /*< Appid human readable name */
+    uint8_t     url[60];                /*< Appid associated url */
     uint32_t    ctr;                    /*< CTR value */
     uint16_t    icon_len;               /*< icon length in bytes (for icon data type */
     uint16_t    icon_type;              /*< icon type (RGB color or icon data) */
     fidostorage_icon_data_t icon;       /*< icon data union (RGB color value or icon data value in RLE encoding) */
 } fidostorage_appid_slot_t;
 
+#define SLOT_MT_SIZE (32 + 32 + 4 + 60 + 60 + 4 + 2 + 2)
 
 /* declaration phase */
 mbed_error_t fidostorage_declare(void);
@@ -129,7 +132,7 @@ mbed_error_t    fidostorage_check_appid_table_integrity(void);
  *
  * @return MBED_ERROR_NONE if the appid is found, or MBED_ERROR_NOTFOUND if not.
  */
-mbed_error_t    fidostorage_get_appid_slot(uint8_t const * const appid, uint32_t * const slot, uint8_t * const hmac);
+mbed_error_t    fidostorage_get_appid_slot(uint8_t const * const appid, uint8_t const * const kh, uint32_t * const slot, uint8_t * const hmac);
 
 /**
  * get the appid slot content from the appid value, its slot id and HMAC value. The slot
@@ -142,6 +145,7 @@ mbed_error_t    fidostorage_get_appid_slot(uint8_t const * const appid, uint32_t
  * @return MBED_ERROR_NONE if the appid is found, or MBED_ERROR_NOTFOUND if not.
  */
 mbed_error_t    fidostorage_get_appid_metadata(uint8_t const * const     appid,
+                                               uint8_t const * const     kh,
                                                uint32_t const            appid_slot,
                                                uint8_t const *           appid_slot_hmac,
                                                fidostorage_appid_slot_t *data_buffer);
@@ -161,6 +165,9 @@ static inline void            fidostorage_dump_slot(fidostorage_appid_slot_t *mt
     printf("|--> appid:      ");
     hexdump(mt->appid, 32);
     printf("|--> name:       %s\n", mt->name);
+    printf("|--> url:        %s\n", mt->url);
+    printf("|--> kh:         ");
+    hexdump(mt->kh, 32);
     printf("|--> flags:      %x\n", mt->flags);
     printf("|--> CTR:        %d\n", mt->ctr);
     printf("|--> icon_len:   %d\n", mt->icon_len);

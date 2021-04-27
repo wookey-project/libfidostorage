@@ -31,11 +31,14 @@ typedef struct {
  */
 typedef struct __packed {
     uint8_t     appid[32];                  /*< application identifier */
+    uint8_t     kh[32];                     /*< application ley handle hash */
     uint32_t    slotid;                     /*< slot identifier, corresponding to sector identifier in SDCard
                                                 where the appid infos are written */
     uint8_t     hmac[32];                   /*< appid slot HMAC        */
-    uint8_t     padding[SECTOR_SIZE - 68];  /*< padding to sector size */
+    uint8_t     padding[SECTOR_SIZE - 68 - 32];  /*< padding to sector size */
 } fidostorage_appid_table_t;
+
+#define SLOT_ENTRY_TO_HMAC_SIZE(x) (sizeof(fidostorage_appid_table_t) - sizeof((x).padding))
 
 /*
  * Specify the effective SDCard header structure (size 4096 bytes).
@@ -247,7 +250,7 @@ static uint8_t shadow_bitmap[1024 + 8 + 32] = { 0 };
 
 
 /* appid is 32 bytes len identifier */
-mbed_error_t    fidostorage_get_appid_slot(uint8_t const * const appid, uint32_t *slotid, uint8_t *hmac)
+mbed_error_t    fidostorage_get_appid_slot(uint8_t const * const appid, uint8_t const * const kh, uint32_t *slotid, uint8_t *hmac)
 {
     mbed_error_t errcode = MBED_ERROR_NONE;
     /* get back buflen (in bytes), convert to words. buflen is already word multiple */
@@ -321,14 +324,21 @@ mbed_error_t    fidostorage_get_appid_slot(uint8_t const * const appid, uint32_t
             if (shadow_bitmap[curr_sector-1] & (0x1 << j)){
                 /* does current cell appid matches ? */
                 if (memcmp(appid_table[j].appid, appid, 32) == 0) {
+                    if(kh != NULL){
+                        /* Check the key handle hash if asked to */
+                        if (memcmp(appid_table[j].kh, kh, 32) != 0) {
+                            goto skip;
+                        }
+                    }
                     log_printf("[fidostorage] found appid! slot id is 0x%x\n", appid_table[j].slotid);
                     /* appid matches ! return slot id and slot HMAC */
                     *slotid = appid_table[j].slotid;
                     memcpy(hmac, &appid_table[j].hmac, sizeof(appid_table[j].hmac));
                     slot_found = true;
                 }
+skip:
                 /* update calculated HMAC */
-                hmac_update(&hmac_ctx, &appid_table[j].appid[0], sizeof(appid_table[j].appid) + sizeof(appid_table[j].slotid) + sizeof(appid_table[j].hmac));
+                hmac_update(&hmac_ctx, &appid_table[j].appid[0], SLOT_ENTRY_TO_HMAC_SIZE(appid_table[j]));
             }
         }
 next:
@@ -383,6 +393,7 @@ err:
 }
 
 mbed_error_t    fidostorage_get_appid_metadata(uint8_t const * const     appid,
+                                               uint8_t const * const     kh,
                                                uint32_t const            slotid,
                                                uint8_t const *           appid_slot_hmac,
                                                fidostorage_appid_slot_t *data_buffer)
@@ -403,7 +414,7 @@ mbed_error_t    fidostorage_get_appid_metadata(uint8_t const * const     appid,
     sys_get_systick(&ms1, PREC_MILLI);
 #endif
 
-    if ((errcode = read_encrypted_SD_crypto_sectors(&ctx.buf[0], SLOT_SIZE, (SECTOR_SIZE * slotid) / SLOT_SIZE)) != MBED_ERROR_NONE) {
+    if ((errcode = read_encrypted_SD_crypto_sectors((uint8_t*)data_buffer, SLOT_SIZE, (SECTOR_SIZE * slotid) / SLOT_SIZE)) != MBED_ERROR_NONE) {
         log_printf("[fidostorage] Failed during SD_enc_read, from sector %d: ret=%d\n", (SECTOR_SIZE * slotid) / SLOT_SIZE, errcode);
         errcode = MBED_ERROR_RDERROR;
         goto err;
@@ -418,9 +429,28 @@ mbed_error_t    fidostorage_get_appid_metadata(uint8_t const * const     appid,
         errcode = MBED_ERROR_INVPARAM;
         goto err;
     }
+    if ((kh != NULL) && (memcmp(kh, mt->kh, 32) != 0)) {
+        log_printf("[fidostorage] metadata of slotid = 0x%x does not correspond to the correct kh\n", slotid);
+        hexdump(kh, 32);
+        hexdump(mt->kh, 32);
+        errcode = MBED_ERROR_INVPARAM;
+        goto err;
+    }
+
     /* overflow detection */
     if (mt->icon_type == ICON_TYPE_IMAGE &&
         mt->icon_len > (SLOT_SIZE - (sizeof(fidostorage_appid_slot_t) - sizeof(fidostorage_icon_data_t)))) {
+        log_printf("[fidostorage] metadata icon len is invalid (too big)\n");
+        errcode = MBED_ERROR_INVSTATE;
+        goto err;
+    }
+    else if (mt->icon_type == ICON_TYPE_COLOR &&
+        mt->icon_len != 3) {
+        log_printf("[fidostorage] metadata icon len is invalid (too big)\n");
+        errcode = MBED_ERROR_INVSTATE;
+        goto err;
+    }
+    else if(mt->icon_len != 0){
         log_printf("[fidostorage] metadata icon len is invalid (too big)\n");
         errcode = MBED_ERROR_INVSTATE;
         goto err;
@@ -433,7 +463,7 @@ mbed_error_t    fidostorage_get_appid_metadata(uint8_t const * const     appid,
 
 
     hmac_init(&hmac_ctx, &ctx.hmac_key[0], sizeof(ctx.hmac_key), SHA256);
-    hmac_update(&hmac_ctx, (uint8_t*)mt, 32 + 4 + 60 + 4 + 2 + 2);
+    hmac_update(&hmac_ctx, (uint8_t*)mt, SLOT_MT_SIZE);
     if (mt->icon_len != 0) {
         hmac_update(&hmac_ctx, &mt->icon.icon_data[0], mt->icon_len);
     }
@@ -485,7 +515,7 @@ mbed_error_t    fidostorage_set_appid_metada(uint32_t  *slotid, fidostorage_appi
 
     if(metadata != NULL){
         hmac_init(&hmac_ctx, &ctx.hmac_key[0], sizeof(ctx.hmac_key), SHA256);
-        hmac_update(&hmac_ctx, (uint8_t*)metadata, 32 + 4 + 60 + 4 + 2 + 2);
+        hmac_update(&hmac_ctx, (uint8_t*)metadata, SLOT_MT_SIZE);
         if (metadata->icon_len != 0) {
             hmac_update(&hmac_ctx, &metadata->icon.icon_data[0], metadata->icon_len);
         }
@@ -538,17 +568,17 @@ mbed_error_t    fidostorage_set_appid_metada(uint32_t  *slotid, fidostorage_appi
     /* TODO: better size handling */
     memset(&ctx.buf[0], 0, ctx.buflen); /* Write zeros to the slot is asked to remove */
     if(metadata != NULL){
-        if(32 + 4 + 60 + 4 + 2 + 2 > ctx.buflen){
+        if(SLOT_MT_SIZE > ctx.buflen){
       	    errcode = MBED_ERROR_INVPARAM;
             goto err;
         }
-        memcpy(&ctx.buf[0], metadata, 32 + 4 + 60 + 4 + 2 + 2);
+        memcpy(&ctx.buf[0], metadata, SLOT_MT_SIZE);
         if (metadata->icon_len != 0) {
-            if((32 + 4 + 60 + 4 + 2 + 2 + metadata->icon_len) > ctx.buflen){
+            if((SLOT_MT_SIZE + metadata->icon_len) > ctx.buflen){
       	        errcode = MBED_ERROR_INVPARAM;
                 goto err;
             }
-            memcpy(&ctx.buf[0] + 32 + 4 + 60 + 4 + 2 + 2, &metadata->icon.icon_data[0], metadata->icon_len);
+            memcpy(&ctx.buf[0] + SLOT_MT_SIZE, &metadata->icon.icon_data[0], metadata->icon_len);
         }
     }
     if ((errcode = write_encrypted_SD_crypto_sectors(&ctx.buf[0], ctx.buflen, (SECTOR_SIZE * curr_slotid) / SLOT_SIZE)) != MBED_ERROR_NONE) {
@@ -582,12 +612,13 @@ mbed_error_t    fidostorage_set_appid_metada(uint32_t  *slotid, fidostorage_appi
                 if (curr_slotnum == ((8*i) + j)) {
                     /* Replace data */
                     memcpy(&appid_table[j].appid[0], metadata->appid, 32);
+                    memcpy(&appid_table[j].kh[0], metadata->kh, 32);
                     appid_table[j].slotid = curr_slotid;
                     memcpy(&appid_table[j].hmac, hmac_slot, sizeof(hmac_slot));
                     to_write = true;
                 }
                 /* update calculated HMAC */
-                hmac_update(&hmac_ctx, &appid_table[j].appid[0], sizeof(appid_table[j].appid) + sizeof(appid_table[j].slotid) + sizeof(appid_table[j].hmac));
+                hmac_update(&hmac_ctx, &appid_table[j].appid[0], SLOT_ENTRY_TO_HMAC_SIZE(appid_table[j]));
             }
         }
         if(to_write == true){
