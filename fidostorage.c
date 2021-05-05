@@ -155,8 +155,10 @@ static inline mbed_error_t fidostorage_get_hmac_key_from_master(uint8_t *master,
     sha256_final(&sha256_ctx, key_h);
     *keylen = 32;
 
+#ifdef CONFIG_USR_LIB_FIDOSTORAGE_DEBUG
     printf("HMAC key is: ");
     hexdump(key_h, 32);
+#endif
 err:
     return errcode;
 }
@@ -177,8 +179,10 @@ static inline mbed_error_t fidostorage_get_aes_key_from_master(uint8_t *master, 
     sha256_final(&sha256_ctx, key_aes);
     *keylen = 32;
 
+#ifdef CONFIG_USR_LIB_FIDOSTORAGE_DEBUG
     log_printf("AES key is: ");
     hexdump(key_aes, 32);
+#endif
 err:
     return errcode;
 }
@@ -399,6 +403,7 @@ mbed_error_t    fidostorage_get_appid_metadata(uint8_t const * const     appid,
                                                fidostorage_appid_slot_t *data_buffer)
 {
     mbed_error_t errcode = MBED_ERROR_NONE;
+    fidostorage_appid_slot_t *mt  = NULL;
 
     if (!fidostorage_is_configured()) {
         errcode = MBED_ERROR_INVSTATE;
@@ -419,20 +424,24 @@ mbed_error_t    fidostorage_get_appid_metadata(uint8_t const * const     appid,
         errcode = MBED_ERROR_RDERROR;
         goto err;
     }
-    fidostorage_appid_slot_t *mt = (fidostorage_appid_slot_t*)&data_buffer[0];
+    mt = (fidostorage_appid_slot_t*)&data_buffer[0];
 
     /* is appid for this slot id match the one given ? */
     if (memcmp(appid, mt->appid, 32) != 0) {
         log_printf("[fidostorage] metadata of slotid = 0x%x does not correspond to the correct appid\n", slotid);
+#ifdef CONFIG_USR_LIB_FIDOSTORAGE_DEBUG
         hexdump(appid, 32);
         hexdump(mt->appid, 32);
+#endif
         errcode = MBED_ERROR_INVPARAM;
         goto err;
     }
     if ((kh != NULL) && (memcmp(kh, mt->kh, 32) != 0)) {
         log_printf("[fidostorage] metadata of slotid = 0x%x does not correspond to the correct kh\n", slotid);
+#ifdef CONFIG_USR_LIB_FIDOSTORAGE_DEBUG
         hexdump(kh, 32);
         hexdump(mt->kh, 32);
+#endif
         errcode = MBED_ERROR_INVPARAM;
         goto err;
     }
@@ -440,18 +449,19 @@ mbed_error_t    fidostorage_get_appid_metadata(uint8_t const * const     appid,
     /* overflow detection */
     if (mt->icon_type == ICON_TYPE_IMAGE &&
         mt->icon_len > (SLOT_SIZE - (sizeof(fidostorage_appid_slot_t) - sizeof(fidostorage_icon_data_t)))) {
-        log_printf("[fidostorage] metadata icon len is invalid (too big)\n");
+        log_printf("[fidostorage] metadata icon len (%d) is invalid (too big)\n", mt->icon_len);
         errcode = MBED_ERROR_INVSTATE;
         goto err;
     }
     else if (mt->icon_type == ICON_TYPE_COLOR &&
         mt->icon_len != 3) {
-        log_printf("[fidostorage] metadata icon len is invalid (too big)\n");
+        log_printf("[fidostorage] metadata icon len for color is invalid (too big)\n");
         errcode = MBED_ERROR_INVSTATE;
         goto err;
     }
-    else if(mt->icon_len != 0){
-        log_printf("[fidostorage] metadata icon len is invalid (too big)\n");
+    else if (mt->icon_type == ICON_TYPE_NONE &&
+             mt->icon_len != 0) {
+        log_printf("[fidostorage] metadata icon len for none is invalid (too big)\n");
         errcode = MBED_ERROR_INVSTATE;
         goto err;
     }
@@ -481,8 +491,10 @@ mbed_error_t    fidostorage_get_appid_metadata(uint8_t const * const     appid,
         goto err;
     }
     log_printf("[fidostorage] appid metadata valid !\n");
-    fidostorage_dump_slot(mt);
 err:
+    if (mt) {
+    fidostorage_dump_slot(mt);
+    }
 #if CONFIG_USR_LIB_FIDOSTORAGE_PERFS
     sys_get_systick(&ms2, PREC_MILLI);
     log_printf("[fidostorage] metadata read, uncrypt and parsing took %d ms\n", (uint32_t)(ms2 - ms1));
