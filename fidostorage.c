@@ -371,8 +371,8 @@ next:
 err:
 #if CONFIG_USR_LIB_FIDOSTORAGE_PERFS
     sys_get_systick(&ms2, PREC_MILLI);
-    log_printf("[fidostorage] took %d ms to read, uncrypt and parse %d bytes from uSD\n", (uint32_t)(ms2-ms1), (curr_sector-1)*SLOT_SIZE);
-    log_printf("[fidostorage] %d loops executed\n", (curr_sector-1));
+    printf("[fidostorage] took %d ms to get appid slot from encrypted header (%d bytes read from uSD)\n", (uint32_t)(ms2-ms1), (curr_sector-1)*SLOT_SIZE);
+    printf("[fidostorage] %d loops executed\n", (curr_sector-1));
 #endif
     return errcode;
 }
@@ -497,7 +497,7 @@ err:
     }
 #if CONFIG_USR_LIB_FIDOSTORAGE_PERFS
     sys_get_systick(&ms2, PREC_MILLI);
-    log_printf("[fidostorage] metadata read, uncrypt and parsing took %d ms\n", (uint32_t)(ms2 - ms1));
+    printf("[fidostorage] took %d ms to get appid metadata from encrypted slot in uSD\n", (uint32_t)(ms2-ms1));
 #endif
     random_secure = SEC_RANDOM_SECURE;
     return errcode;
@@ -520,6 +520,12 @@ mbed_error_t    fidostorage_set_appid_metada(uint32_t  *slotid, fidostorage_appi
         errcode = MBED_ERROR_INVPARAM;
         goto err;
     }
+#if CONFIG_USR_LIB_FIDOSTORAGE_PERFS
+    uint64_t ms1, ms2;
+
+    sys_get_systick(&ms1, PREC_MILLI);
+#endif
+
     /* Let us compute the HMAC of our metadata */
     uint8_t         hmac_slot[32];
     hmac_context hmac_ctx;
@@ -653,6 +659,11 @@ mbed_error_t    fidostorage_set_appid_metada(uint32_t  *slotid, fidostorage_appi
         errcode = MBED_ERROR_RDERROR;
         goto err;
     }
+#if CONFIG_USR_LIB_FIDOSTORAGE_PERFS
+    sys_get_systick(&ms2, PREC_MILLI);
+    printf("[fidostorage] took %d ms to update encrypted appid metadata in uSD\n", (uint32_t)(ms2-ms1));
+#endif
+
 
 err:
     return errcode;
