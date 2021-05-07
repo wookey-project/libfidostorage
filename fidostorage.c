@@ -254,7 +254,7 @@ static uint8_t shadow_bitmap[1024 + 8 + 32] = { 0 };
 
 
 /* appid is 32 bytes len identifier */
-mbed_error_t    fidostorage_get_appid_slot(uint8_t const * const appid, uint8_t const * const kh, uint32_t *slotid, uint8_t *hmac)
+mbed_error_t    fidostorage_get_appid_slot(uint8_t const * const appid, uint8_t const * const kh, uint32_t *slotid, uint8_t *hmac, bool check_header)
 {
     mbed_error_t errcode = MBED_ERROR_NONE;
     /* get back buflen (in bytes), convert to words. buflen is already word multiple */
@@ -283,8 +283,10 @@ mbed_error_t    fidostorage_get_appid_slot(uint8_t const * const appid, uint8_t 
     sys_get_systick(&ms1, PREC_MILLI);
 #endif
 
-    /* initialize HMAC calculation */
-    hmac_init(&hmac_ctx, &ctx.hmac_key[0], sizeof(ctx.hmac_key), SHA256);
+    if (check_header != false) {
+        /* initialize HMAC calculation */
+        hmac_init(&hmac_ctx, &ctx.hmac_key[0], sizeof(ctx.hmac_key), SHA256);
+    }
 
     /* we start from sector 0, to get back the bitmap and the HMAC */
     if ((errcode = read_encrypted_SD_crypto_sectors(&ctx.buf[0], ctx.buflen, 0)) != MBED_ERROR_NONE) {
@@ -294,11 +296,15 @@ mbed_error_t    fidostorage_get_appid_slot(uint8_t const * const appid, uint8_t 
     /* get back HMAC */
     fidostorage_header_t *header = (fidostorage_header_t*)&ctx.buf[0];
 
-    memcpy(header_hmac, &header->hmac[0], 32);
+    if (check_header != false) {
+        memcpy(header_hmac, &header->hmac[0], 32);
+    }
 
-    /* starting HMAC calculation */
-    hmac_update(&hmac_ctx, header->bitmap, sizeof(header->bitmap));
-    hmac_update(&hmac_ctx, (uint8_t*)&(header->ctr_replay), sizeof(header->ctr_replay));
+    if (check_header != false) {
+        /* starting HMAC calculation */
+        hmac_update(&hmac_ctx, header->bitmap, sizeof(header->bitmap));
+        hmac_update(&hmac_ctx, (uint8_t*)&(header->ctr_replay), sizeof(header->ctr_replay));
+    }
 
     /* Copy our shadow bitmap table */
     memcpy(shadow_bitmap, &(header->bitmap), sizeof(shadow_bitmap));
@@ -339,35 +345,39 @@ mbed_error_t    fidostorage_get_appid_slot(uint8_t const * const appid, uint8_t 
                     *slotid = appid_table[j].slotid;
                     memcpy(hmac, &appid_table[j].hmac, sizeof(appid_table[j].hmac));
                     slot_found = true;
+                    if (check_header == false) {
+                        /* no header HMAC calculation, we can leave now */
+                        break;
+                    }
                 }
 skip:
-                /* update calculated HMAC */
-                hmac_update(&hmac_ctx, &appid_table[j].appid[0], SLOT_ENTRY_TO_HMAC_SIZE(appid_table[j]));
+                if (check_header != false) {
+                    /* update calculated HMAC */
+                    hmac_update(&hmac_ctx, &appid_table[j].appid[0], SLOT_ENTRY_TO_HMAC_SIZE(appid_table[j]));
+                }
             }
         }
 next:
         curr_sector++;
     }
-    hmac_finalize(&hmac_ctx, &calculated_hmac[0], &hmac_len);
+    if (check_header != false) {
+        hmac_finalize(&hmac_ctx, &calculated_hmac[0], &hmac_len);
+
 #if CONFIG_USR_LIB_FIDOSTORAGE_DEBUG
-    log_printf("Header HMAC read on SD:\n");
-    hexdump(header_hmac, 32);
-    log_printf("Header calculated HMAC:\n");
-    hexdump(calculated_hmac, hmac_len);
+        log_printf("Header HMAC read on SD:\n");
+        hexdump(header_hmac, 32);
+        log_printf("Header calculated HMAC:\n");
+        hexdump(calculated_hmac, hmac_len);
 #endif
-    if (memcmp(&header_hmac[0], &calculated_hmac[0], hmac_len) != 0) {
-        log_printf("[logstorage] slot table integrity check failed !\n");
-#if 0
-        errcode = MBED_ERROR_UNKNOWN;
-        goto err;
-#endif
+        if (memcmp(&header_hmac[0], &calculated_hmac[0], hmac_len) != 0) {
+            log_printf("[logstorage] slot table integrity check failed !\n");
+        }
     }
     if (slot_found != true) {
         /* appid not found !*/
         log_printf("[fidostorage] appid not found\n");
         errcode = MBED_ERROR_NOTFOUND;
     }
-
 err:
 #if CONFIG_USR_LIB_FIDOSTORAGE_PERFS
     sys_get_systick(&ms2, PREC_MILLI);

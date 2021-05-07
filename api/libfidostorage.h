@@ -148,7 +148,7 @@ mbed_error_t    fidostorage_check_appid_table_integrity(void);
  *
  * @return MBED_ERROR_NONE if the appid is found, or MBED_ERROR_NOTFOUND if not.
  */
-mbed_error_t    fidostorage_get_appid_slot(uint8_t const * const appid, uint8_t const * const kh, uint32_t * const slot, uint8_t * const hmac);
+mbed_error_t    fidostorage_get_appid_slot(uint8_t const * const appid, uint8_t const * const kh, uint32_t * const slotid, uint8_t * const hmac, bool check_header);
 
 /**
  * get the appid slot content from the appid value, its slot id and HMAC value. The slot
