@@ -254,7 +254,7 @@ static uint8_t shadow_bitmap[1024 + 8 + 32] = { 0 };
  */
 
 /* appid is 32 bytes len identifier */
-mbed_error_t    fidostorage_get_appid_slot(uint8_t const * const appid, uint8_t const * const kh, uint32_t *slotid, uint8_t *hmac, bool check_header)
+mbed_error_t    fidostorage_get_appid_slot(uint8_t const appid[32], uint8_t const kh[32], uint32_t *slotid, uint8_t hmac[32], uint8_t replay_counter[8], bool check_header)
 {
     mbed_error_t errcode = MBED_ERROR_NONE;
     /* get back buflen (in bytes), convert to words. buflen is already word multiple */
@@ -306,6 +306,13 @@ mbed_error_t    fidostorage_get_appid_slot(uint8_t const * const appid, uint8_t 
         /* starting HMAC calculation */
         hmac_update(&hmac_ctx, header->bitmap, sizeof(header->bitmap));
         hmac_update(&hmac_ctx, (uint8_t*)&(header->ctr_replay), sizeof(header->ctr_replay));
+    }
+    if(replay_counter != NULL){
+        if(sizeof(header->ctr_replay) != 8){
+            errcode = MBED_ERROR_INVPARAM;
+            goto err;
+        }
+        memcpy(replay_counter, (uint8_t*)&(header->ctr_replay), 8);
     }
 
     /* Copy our shadow bitmap table */
@@ -390,10 +397,10 @@ err:
 }
 
 
-mbed_error_t    fidostorage_get_appid_metadata(uint8_t const * const     appid,
-                                               uint8_t const * const     kh,
-                                               uint32_t const            slotid,
-                                               uint8_t const *           appid_slot_hmac,
+mbed_error_t    fidostorage_get_appid_metadata(const uint8_t appid[32],
+                                               const uint8_t kh[32],
+                                               const uint32_t slotid,
+                                               const uint8_t appid_slot_hmac[32],
                                                fidostorage_appid_slot_t *data_buffer)
 {
     mbed_error_t errcode = MBED_ERROR_NONE;

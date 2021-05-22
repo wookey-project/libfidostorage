@@ -136,7 +136,7 @@ mbed_error_t fidostorage_declare(void);
 mbed_error_t    fidostorage_configure(uint8_t *buf, uint16_t  buflen, uint8_t *aes_key);
 
 /* given an appid, is the appid valid (already at least registered) ? - bitmap check */
-mbed_error_t    fidostorage_appid_is_valid(uint8_t *appid);
+mbed_error_t    fidostorage_appid_is_valid(const uint8_t appid[32]);
 
 mbed_error_t    fidostorage_check_appid_table_integrity(void);
 
@@ -148,7 +148,7 @@ mbed_error_t    fidostorage_check_appid_table_integrity(void);
  *
  * @return MBED_ERROR_NONE if the appid is found, or MBED_ERROR_NOTFOUND if not.
  */
-mbed_error_t    fidostorage_get_appid_slot(uint8_t const * const appid, uint8_t const * const kh, uint32_t * const slotid, uint8_t * const hmac, bool check_header);
+mbed_error_t    fidostorage_get_appid_slot(const uint8_t appid[32], const uint8_t kh[32], uint32_t *slotid, uint8_t hmac[32], uint8_t replay_counter[8], bool check_header);
 
 /**
  * get the appid slot content from the appid value, its slot id and HMAC value. The slot
@@ -160,10 +160,10 @@ mbed_error_t    fidostorage_get_appid_slot(uint8_t const * const appid, uint8_t 
  *
  * @return MBED_ERROR_NONE if the appid is found, or MBED_ERROR_NOTFOUND if not.
  */
-mbed_error_t    fidostorage_get_appid_metadata(uint8_t const * const     appid,
-                                               uint8_t const * const     kh,
-                                               uint32_t const            appid_slot,
-                                               uint8_t const *           appid_slot_hmac,
+mbed_error_t    fidostorage_get_appid_metadata(const uint8_t appid[32],
+                                               const uint8_t kh[32],
+                                               const uint32_t appid_slot,
+                                               const uint8_t appid_slot_hmac[32],
                                                fidostorage_appid_slot_t *data_buffer);
 
 
