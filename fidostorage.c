@@ -246,12 +246,12 @@ err:
     return errcode;
 }
 
+/* Shadow bitmap for caching */
+static uint8_t shadow_bitmap[1024 + 8 + 32] = { 0 };
+
 /**********************************************************
  * Manipulate storage content
  */
-
-static uint8_t shadow_bitmap[1024 + 8 + 32] = { 0 };
-
 
 /* appid is 32 bytes len identifier */
 mbed_error_t    fidostorage_get_appid_slot(uint8_t const * const appid, uint8_t const * const kh, uint32_t *slotid, uint8_t *hmac, bool check_header)
@@ -272,10 +272,12 @@ mbed_error_t    fidostorage_get_appid_slot(uint8_t const * const appid, uint8_t 
         errcode = MBED_ERROR_INVSTATE;
         goto err;
     }
-    if (appid == NULL || slotid == NULL || hmac == NULL) {
-        log_printf("[fidostorage] invalid param !\n");
-        errcode = MBED_ERROR_INVPARAM;
-        goto err;
+    if (appid != NULL){
+        if (slotid == NULL || hmac == NULL) {
+            log_printf("[fidostorage] invalid param !\n");
+            errcode = MBED_ERROR_INVPARAM;
+            goto err;
+        }
     }
 #if CONFIG_USR_LIB_FIDOSTORAGE_PERFS
     uint64_t ms1, ms2;
@@ -331,9 +333,9 @@ mbed_error_t    fidostorage_get_appid_slot(uint8_t const * const appid, uint8_t 
 
         fidostorage_appid_table_t   *appid_table = (fidostorage_appid_table_t*)&ctx.buf[0];
         for (uint16_t j = 0; j < numcell; j++) {
-            if (shadow_bitmap[curr_sector-1] & (0x1 << j)){
+            if (shadow_bitmap[curr_sector-1] & (0x1 << j)){                
                 /* does current cell appid matches ? */
-                if (memcmp(appid_table[j].appid, appid, 32) == 0) {
+                if ((appid != NULL) && (memcmp(appid_table[j].appid, appid, 32) == 0)) {
                     if(kh != NULL){
                         /* Check the key handle hash if asked to */
                         if (memcmp(appid_table[j].kh, kh, 32) != 0) {
@@ -373,7 +375,7 @@ next:
             log_printf("[logstorage] slot table integrity check failed !\n");
         }
     }
-    if (slot_found != true) {
+    if ((appid != NULL) && (slot_found != true)) {
         /* appid not found !*/
         log_printf("[fidostorage] appid not found\n");
         errcode = MBED_ERROR_NOTFOUND;
@@ -387,24 +389,6 @@ err:
     return errcode;
 }
 
-
-mbed_error_t    fidostorage_register_appid(uint8_t const * const appid, uint32_t  * const slotid)
-{
-    mbed_error_t errcode = MBED_ERROR_NONE;
-
-    if (!fidostorage_is_configured()) {
-        errcode = MBED_ERROR_INVSTATE;
-        goto err;
-    }
-    if (appid == NULL || slotid == NULL) {
-        errcode = MBED_ERROR_INVPARAM;
-        goto err;
-    }
-
-
-err:
-    return errcode;
-}
 
 mbed_error_t    fidostorage_get_appid_metadata(uint8_t const * const     appid,
                                                uint8_t const * const     kh,
