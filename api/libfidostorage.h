@@ -205,6 +205,10 @@ static inline void            fidostorage_dump_slot(fidostorage_appid_slot_t *mt
 #endif
 }
 
+mbed_error_t    fidostorage_get_replay_counter(uint8_t replay_counter[8], bool check_header);
 
+mbed_error_t    fidostorage_set_replay_counter(const uint8_t replay_counter[8]);
+
+mbed_error_t    fidostorage_inc_replay_counter(const uint8_t replay_counter[8]);
 
 #endif/*!LIBFIDOSTORAGE_H_*/

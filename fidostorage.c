@@ -669,3 +669,93 @@ mbed_error_t    fidostorage_set_appid_metada(uint32_t  *slotid, fidostorage_appi
 err:
     return errcode;
 }
+
+
+mbed_error_t    fidostorage_get_replay_counter(uint8_t replay_counter[8], bool check_header)
+{
+    return fidostorage_get_appid_slot(NULL, NULL, NULL, NULL, replay_counter, check_header);
+}
+
+
+mbed_error_t    fidostorage_set_replay_counter(const uint8_t replay_counter[8])
+{
+    mbed_error_t errcode = MBED_ERROR_NONE;
+    hmac_context hmac_ctx;
+    uint32_t hmac_len = 0;
+
+    if (!fidostorage_is_configured()) {
+        errcode = MBED_ERROR_INVSTATE;
+        goto err;
+    }
+#if CONFIG_USR_LIB_FIDOSTORAGE_PERFS
+    uint64_t ms1, ms2;
+
+    sys_get_systick(&ms1, PREC_MILLI);
+#endif
+    /* First, read our first header sector */
+    if ((errcode = read_encrypted_SD_crypto_sectors(&ctx.buf[0], SLOT_SIZE, 0)) != MBED_ERROR_NONE) {
+        log_printf("[fidostorage] Failed during SD_enc_read, from sector %d: ret=%d\n", 0, errcode);
+        errcode = MBED_ERROR_RDERROR;
+        goto err;
+    }
+    /* Copy our shadow bitmap */
+    memcpy(shadow_bitmap, &ctx.buf[0], sizeof(shadow_bitmap));
+
+    /* Update the global anti-replay counter with the provided value */
+    memcpy(&shadow_bitmap[1024], replay_counter, 8);
+
+    /* Compute our new header HMAC */
+    hmac_init(&hmac_ctx, &ctx.hmac_key[0], sizeof(ctx.hmac_key), SHA256);
+    hmac_update(&hmac_ctx, shadow_bitmap, 1024 + 8);
+
+    unsigned int i;
+    for(i = 0; i < (SLOT_NUM / 8); i++){
+        /* Skip inactive slots */
+        if(shadow_bitmap[i] == 0){
+            continue;
+        }
+        /* Read our slot entry */
+        if ((errcode = read_encrypted_SD_crypto_sectors(&ctx.buf[0], ctx.buflen, (i+1))) != MBED_ERROR_NONE) {
+            log_printf("[fidostorage] Failed during SD_enc_read, from sector %d: ret=%d\n", i, errcode);
+            errcode = MBED_ERROR_RDERROR;
+            goto err;
+        }
+        uint16_t numcell = 8; /* there are 8 cells per 4k read (512 bytes per cell) */
+
+        fidostorage_appid_table_t   *appid_table = (fidostorage_appid_table_t*)&ctx.buf[0];
+        for (uint16_t j = 0; j < numcell; j++) {
+            if (shadow_bitmap[i] & (0x1 << j)){
+                /* update calculated HMAC */
+                hmac_update(&hmac_ctx, &appid_table[j].appid[0], SLOT_ENTRY_TO_HMAC_SIZE(appid_table[j]));
+            }
+        }
+    }
+    /* Finalize HMAC computation */
+    hmac_len = 32;
+    hmac_finalize(&hmac_ctx, shadow_bitmap + 1024 + 8, &hmac_len);
+    memset(&ctx.buf[0], 0, ctx.buflen);
+    memcpy(&ctx.buf[0], shadow_bitmap, sizeof(shadow_bitmap));
+    /* Now commit the shadow map and its hmac */
+    if ((errcode = write_encrypted_SD_crypto_sectors(&ctx.buf[0], ctx.buflen, 0)) != MBED_ERROR_NONE) {
+        log_printf("[fidostorage] Failed during SD_enc_write, from sector %d: ret=%d\n", 0, errcode);
+        errcode = MBED_ERROR_RDERROR;
+        goto err;
+    }
+#if CONFIG_USR_LIB_FIDOSTORAGE_PERFS
+    sys_get_systick(&ms2, PREC_MILLI);
+    printf("[fidostorage] took %d ms to update global anti-replay counter\n", (uint32_t)(ms2-ms1));
+#endif
+
+
+err:
+    return errcode;
+}
+
+mbed_error_t    fidostorage_inc_replay_counter(const uint8_t replay_counter[8])
+{
+    /* Increment little endian counter */
+    uint64_t *ctr = (uint64_t*)replay_counter;
+    (*ctr)++;
+
+    return MBED_ERROR_NONE;
+}
