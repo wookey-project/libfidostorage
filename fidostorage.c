@@ -266,6 +266,7 @@ mbed_error_t    fidostorage_get_appid_slot(uint8_t const appid[32], uint8_t cons
     uint8_t  calculated_hmac[32];
     uint8_t  header_hmac[32];
     uint32_t hmac_len = 32;
+    uint16_t active_slots = 0;
 
     if (!fidostorage_is_configured()) {
         log_printf("[fidostorage] not yet configured!\n");
@@ -337,10 +338,10 @@ mbed_error_t    fidostorage_get_appid_slot(uint8_t const appid[32], uint8_t cons
             goto err;
         }
         uint16_t numcell = 8; /* there are 8 cells per 4k read (512 bytes per cell) */
-
         fidostorage_appid_table_t   *appid_table = (fidostorage_appid_table_t*)&ctx.buf[0];
         for (uint16_t j = 0; j < numcell; j++) {
-            if (shadow_bitmap[curr_sector-1] & (0x1 << j)){                
+            if (shadow_bitmap[curr_sector-1] & (0x1 << j)){
+                active_slots++;           
                 /* does current cell appid matches ? */
                 if ((appid != NULL) && (memcmp(appid_table[j].appid, appid, 32) == 0)) {
                     if(kh != NULL){
@@ -390,8 +391,8 @@ next:
 err:
 #if CONFIG_USR_LIB_FIDOSTORAGE_PERFS
     sys_get_systick(&ms2, PREC_MILLI);
-    printf("[fidostorage] took %d ms to get appid slot from encrypted header (%d bytes read from uSD)\n", (uint32_t)(ms2-ms1), (curr_sector-1)*SLOT_SIZE);
-    printf("[fidostorage] %d loops executed\n", (curr_sector-1));
+    printf("[fidostorage] took %d ms to get appid slot from encrypted header (%d bytes read from uSD)\n", (uint32_t)(ms2-ms1), active_slots*SECTOR_SIZE);
+    printf("[fidostorage] %d loops executed, %d active slots\n", (curr_sector-1), active_slots);
 #endif
     return errcode;
 }
