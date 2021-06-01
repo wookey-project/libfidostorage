@@ -253,6 +253,25 @@ static uint8_t shadow_bitmap[1024 + 8 + 32] = { 0 };
  * Manipulate storage content
  */
 
+/* Find a free slot and return its slot number and slotid */
+bool fidostorage_find_free_slot(uint32_t *num, uint32_t *slotid)
+{
+    mbed_error_t errcode = MBED_ERROR_NONE;
+    /* First of all, read the bitmap */
+    if ((errcode = read_encrypted_SD_crypto_sectors(&ctx.buf[0], ctx.buflen, 0)) != MBED_ERROR_NONE) {
+        log_printf("[fidostorage] failed while reading bitmap and HMAC\n");
+        goto err;
+    }
+    fidostorage_header_t *header = (fidostorage_header_t*)&ctx.buf[0];
+
+    /* Copy our shadow bitmap table */
+    memcpy(shadow_bitmap, &(header->bitmap), sizeof(shadow_bitmap));
+
+    return find_free_slot(num, slotid, shadow_bitmap);
+err:
+    return false;
+}
+
 /* appid is 32 bytes len identifier */
 mbed_error_t    fidostorage_get_appid_slot(uint8_t const appid[32], uint8_t const kh[32], uint32_t *slotid, uint8_t hmac[32], uint8_t replay_counter[8], bool check_header)
 {

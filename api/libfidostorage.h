@@ -135,10 +135,8 @@ mbed_error_t fidostorage_declare(void);
 /* configure buffers */
 mbed_error_t    fidostorage_configure(uint8_t *buf, uint16_t  buflen, uint8_t *aes_key);
 
-/* given an appid, is the appid valid (already at least registered) ? - bitmap check */
-mbed_error_t    fidostorage_appid_is_valid(const uint8_t appid[32]);
-
-mbed_error_t    fidostorage_check_appid_table_integrity(void);
+/* Find a free slot and return its slot number and slotid */
+bool fidostorage_find_free_slot(uint32_t *num, uint32_t *slotid);
 
 /**
  * get the appid storage slot from the appid value
