@@ -80,7 +80,10 @@
 /* 8192 slots max */
 #define SLOT_NUM 8192
 
-
+typedef enum {
+    FIDOSTORAGE_SET_MODE_NEW = 0,
+    FIDOSTORAGE_SET_MODE_TEMPLATED = 1
+} fidostorage_set_mode_t;
 
 typedef enum {
     ICON_TYPE_NONE = 0,
