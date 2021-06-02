@@ -626,9 +626,9 @@ mbed_error_t    fidostorage_set_appid_metadata(uint32_t  *slotid, fidostorage_ap
 
     printf("[XXX] writing buffer to SD\n");
     printf("[XXX] buff appid is:\n");
-    hexdump((fidostorage_appid_slot_t*)(&ctx.buf[0]).appid, 32);
+    hexdump(((fidostorage_appid_slot_t*)(&ctx.buf[0]))->appid, 32);
     printf("[XXX] buffKH is:\n");
-    hexdump((fidostorage_appid_slot_t*)(&ctx.buf[0]).kh, 32);
+    hexdump(((fidostorage_appid_slot_t*)(&ctx.buf[0]))->kh, 32);
     if ((errcode = write_encrypted_SD_crypto_sectors(&ctx.buf[0], ctx.buflen, (SECTOR_SIZE * curr_slotid) / SLOT_SIZE)) != MBED_ERROR_NONE) {
         log_printf("[fidostorage] Failed during SD_enc_write, from sector %d: ret=%d\n", (SECTOR_SIZE * curr_slotid) / SLOT_SIZE, errcode);
         errcode = MBED_ERROR_RDERROR;
