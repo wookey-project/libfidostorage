@@ -293,7 +293,7 @@ mbed_error_t    fidostorage_get_appid_slot(uint8_t const appid[32], uint8_t cons
         goto err;
     }
     if (appid != NULL){
-        if (slotid == NULL || hmac == NULL) {
+        if (slotid == NULL) {
             log_printf("[fidostorage] invalid param !\n");
             errcode = MBED_ERROR_INVPARAM;
             goto err;
@@ -372,7 +372,9 @@ mbed_error_t    fidostorage_get_appid_slot(uint8_t const appid[32], uint8_t cons
                     log_printf("[fidostorage] found appid! slot id is 0x%x\n", appid_table[j].slotid);
                     /* appid matches ! return slot id and slot HMAC */
                     *slotid = appid_table[j].slotid;
-                    memcpy(hmac, &appid_table[j].hmac, sizeof(appid_table[j].hmac));
+                    if(hmac != NULL){
+                        memcpy(hmac, &appid_table[j].hmac, sizeof(appid_table[j].hmac));
+                    }
                     slot_found = true;
                     if (check_header == false) {
                         /* no header HMAC calculation, we can leave now */
