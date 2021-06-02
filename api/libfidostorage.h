@@ -166,7 +166,7 @@ mbed_error_t    fidostorage_get_appid_metadata(const uint8_t appid[32],
 
 
 
-mbed_error_t    fidostorage_set_appid_metada(uint32_t  *slotid, fidostorage_appid_slot_t const * const metadata);
+mbed_error_t    fidostorage_set_appid_metadata(uint32_t  *slotid, fidostorage_appid_slot_t const * const metadata);
 
 /*@
   @ requires \valid_read(mt);

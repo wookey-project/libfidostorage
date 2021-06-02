@@ -360,7 +360,7 @@ mbed_error_t    fidostorage_get_appid_slot(uint8_t const appid[32], uint8_t cons
         fidostorage_appid_table_t   *appid_table = (fidostorage_appid_table_t*)&ctx.buf[0];
         for (uint16_t j = 0; j < numcell; j++) {
             if (shadow_bitmap[curr_sector-1] & (0x1 << j)){
-                active_slots++;           
+                active_slots++;
                 /* does current cell appid matches ? */
                 if ((appid != NULL) && (memcmp(appid_table[j].appid, appid, 32) == 0)) {
                     if(kh != NULL){
@@ -524,7 +524,7 @@ err:
     return errcode;
 }
 
-mbed_error_t    fidostorage_set_appid_metada(uint32_t  *slotid, fidostorage_appid_slot_t const * const metadata)
+mbed_error_t    fidostorage_set_appid_metadata(uint32_t  *slotid, fidostorage_appid_slot_t const * const metadata)
 {
     mbed_error_t errcode = MBED_ERROR_NONE;
 
