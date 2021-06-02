@@ -171,15 +171,15 @@ mbed_error_t    fidostorage_set_appid_metadata(uint32_t  *slotid, fidostorage_ap
 /*@
   @ requires \valid_read(mt);
   */
-static inline void            fidostorage_dump_slot(fidostorage_appid_slot_t *mt __attribute__((unused)))
+static inline void            fidostorage_dump_slot(fidostorage_appid_slot_t const  * const mt __attribute__((unused)))
 {
 #if CONFIG_USR_LIB_FIDOSTORAGE_DEBUG
     printf("--- appid metadata------\n");
-    printf("|--> appid:      ");
+    printf("|--> appid:      \n");
     hexdump(mt->appid, 32);
     printf("|--> name:       %s\n", mt->name);
     printf("|--> url:        %s\n", mt->url);
-    printf("|--> kh:         ");
+    printf("|--> kh:         \n");
     hexdump(mt->kh, 32);
     printf("|--> flags:      %x\n", mt->flags);
     printf("|--> CTR:        %d\n", mt->ctr);
