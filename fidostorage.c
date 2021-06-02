@@ -582,7 +582,7 @@ mbed_error_t    fidostorage_set_appid_metadata(uint32_t  *slotid, fidostorage_ap
     uint32_t curr_slotid;
     uint32_t curr_slotnum;
     /* Are we asked to allocate a new slotid? */
-    if(*slotid == 0){
+    if(*slotid == 0) {
         /* Find the first slot */
         if(!find_free_slot(&curr_slotnum, &curr_slotid, shadow_bitmap)){
   	    errcode = MBED_ERROR_NOMEM;
@@ -616,6 +616,10 @@ mbed_error_t    fidostorage_set_appid_metadata(uint32_t  *slotid, fidostorage_ap
       	    errcode = MBED_ERROR_INVPARAM;
             goto err;
         }
+
+        printf("%s[%d]: dumping metadata again before memcpy\n", __func__, __LINE__);
+        fidostorage_dump_slot(metadata);
+
         memcpy(&ctx.buf[0], metadata, SLOT_MT_SIZE);
         if (metadata->icon_len != 0) {
             if((SLOT_MT_SIZE + metadata->icon_len) > ctx.buflen){
