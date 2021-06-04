@@ -135,8 +135,11 @@ mbed_error_t fidostorage_declare(void);
 /* configure buffers */
 mbed_error_t    fidostorage_configure(uint8_t *buf, uint16_t  buflen, uint8_t *aes_key);
 
+/* Fetch shadow bitmap from SD to SRAM */
+mbed_error_t    fidostorage_fetch_shadow_bitmap(void);
+
 /* Find a free slot and return its slot number and slotid */
-bool fidostorage_find_free_slot(uint32_t *num, uint32_t *slotid);
+bool fidostorage_find_free_slot(uint32_t *num, uint32_t *slotid, bool fetch_shadow_bitmap);
 
 /**
  * get the appid storage slot from the appid value
@@ -166,7 +169,7 @@ mbed_error_t    fidostorage_get_appid_metadata(const uint8_t appid[32],
 
 
 
-mbed_error_t    fidostorage_set_appid_metadata(uint32_t  *slotid, fidostorage_appid_slot_t const * const metadata);
+mbed_error_t    fidostorage_set_appid_metadata(uint32_t  *slotid, fidostorage_appid_slot_t const * const metadata, const bool fetch_shadow_bitmap);
 
 /*@
   @ requires \valid_read(mt);
@@ -205,7 +208,7 @@ static inline void            fidostorage_dump_slot(fidostorage_appid_slot_t con
 
 mbed_error_t    fidostorage_get_replay_counter(uint8_t replay_counter[8], bool check_header);
 
-mbed_error_t    fidostorage_set_replay_counter(const uint8_t replay_counter[8]);
+mbed_error_t    fidostorage_set_replay_counter(const uint8_t replay_counter[8], const bool fetch_shadow_bitmap);
 
 mbed_error_t    fidostorage_inc_replay_counter(const uint8_t replay_counter[8]);
 

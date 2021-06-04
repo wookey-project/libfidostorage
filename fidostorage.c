@@ -224,7 +224,7 @@ mbed_error_t    fidostorage_configure(uint8_t *buf, uint16_t  buflen, uint8_t *m
     /* set storage key */
     memcpy(&ctx.key[0], master_key, 32);
     /* Derive our AES key */
-    uint8_t aes_key[32];
+    uint8_t aes_key[32] = { 0 };
     uint32_t keylen = sizeof(aes_key);
     if ((errcode = fidostorage_get_aes_key_from_master(master_key, aes_key, &keylen)) != MBED_ERROR_NONE) {
         log_printf("[fidostorage] failed while setting encryption key\n");
@@ -253,19 +253,31 @@ static uint8_t shadow_bitmap[1024 + 8 + 32] = { 0 };
  * Manipulate storage content
  */
 
-/* Find a free slot and return its slot number and slotid */
-bool fidostorage_find_free_slot(uint32_t *num, uint32_t *slotid)
+mbed_error_t    fidostorage_fetch_shadow_bitmap(void)
 {
     mbed_error_t errcode = MBED_ERROR_NONE;
-    /* First of all, read the bitmap */
-    if ((errcode = read_encrypted_SD_crypto_sectors(&ctx.buf[0], ctx.buflen, 0)) != MBED_ERROR_NONE) {
-        log_printf("[fidostorage] failed while reading bitmap and HMAC\n");
+    /* First, read our first header sector */
+    if ((errcode = read_encrypted_SD_crypto_sectors(&ctx.buf[0], SLOT_SIZE, 0)) != MBED_ERROR_NONE) {
+        log_printf("[fidostorage] Failed during SD_enc_read (when fetching shadow bitmap), from sector %d: ret=%d\n", 0, errcode);
+        errcode = MBED_ERROR_RDERROR;
         goto err;
     }
-    fidostorage_header_t *header = (fidostorage_header_t*)&ctx.buf[0];
+    /* Copy our shadow bitmap */
+    memcpy(shadow_bitmap, &ctx.buf[0], sizeof(shadow_bitmap));
 
-    /* Copy our shadow bitmap table */
-    memcpy(shadow_bitmap, &(header->bitmap), sizeof(shadow_bitmap));
+err:
+    return errcode;
+}
+
+
+/* Find a free slot and return its slot number and slotid */
+bool fidostorage_find_free_slot(uint32_t *num, uint32_t *slotid, bool fetch_shadow_bitmap)
+{
+    if(fetch_shadow_bitmap == true){
+        if(fidostorage_fetch_shadow_bitmap() != MBED_ERROR_NONE){
+            goto err;
+        }
+    }
 
     return find_free_slot(num, slotid, shadow_bitmap);
 err:
@@ -526,9 +538,12 @@ err:
     return errcode;
 }
 
-mbed_error_t    fidostorage_set_appid_metadata(uint32_t  *slotid, fidostorage_appid_slot_t const * const metadata)
+
+mbed_error_t    fidostorage_set_appid_metadata(uint32_t  *slotid, fidostorage_appid_slot_t const * const metadata, const bool fetch_shadow_bitmap)
 {
     mbed_error_t errcode = MBED_ERROR_NONE;
+    uint8_t appid[32] = { 0 };
+    uint8_t kh_hash[32] = { 0 };
 
     printf("%s: dumping metadata that will be set...\n", __func__);
     fidostorage_dump_slot(metadata);
@@ -570,15 +585,12 @@ mbed_error_t    fidostorage_set_appid_metadata(uint32_t  *slotid, fidostorage_ap
         hexdump(hmac_slot, hmac_len);
 #endif
     }
-    /* First, read our first header sector */
-    if ((errcode = read_encrypted_SD_crypto_sectors(&ctx.buf[0], SLOT_SIZE, 0)) != MBED_ERROR_NONE) {
-        log_printf("[fidostorage] Failed during SD_enc_read, from sector %d: ret=%d\n", 0, errcode);
-        errcode = MBED_ERROR_RDERROR;
-        goto err;
+    /* Do we have to fetch our shadow bitmap? */
+    if(fetch_shadow_bitmap == true){
+        if((errcode = fidostorage_fetch_shadow_bitmap()) != MBED_ERROR_NONE){
+            goto err;
+        }
     }
-    /* Copy our shadow bitmap */
-    memcpy(shadow_bitmap, &ctx.buf[0], sizeof(shadow_bitmap));
-
     uint32_t curr_slotid;
     uint32_t curr_slotnum;
     /* Are we asked to allocate a new slotid? */
@@ -609,25 +621,39 @@ mbed_error_t    fidostorage_set_appid_metadata(uint32_t  *slotid, fidostorage_ap
     }
 
     /* Write the slot content */
-    /* TODO: better size handling */
-    memset(&ctx.buf[0], 0, ctx.buflen); /* Write zeros to the slot is asked to remove */
     if(metadata != NULL){
         if(SLOT_MT_SIZE > ctx.buflen){
       	    errcode = MBED_ERROR_INVPARAM;
             goto err;
         }
-
+        memcpy(appid, metadata->appid, 32);
+        memcpy(kh_hash, metadata->kh, 32);
+ 
         printf("%s[%d]: dumping metadata again before memcpy\n", __func__, __LINE__);
         fidostorage_dump_slot(metadata);
 
-        memcpy(&ctx.buf[0], metadata, SLOT_MT_SIZE);
+        /* NOTE: because of tight SRAM constraints, metadata and internal
+         * buffer can be aliased! We do not copy stuff if this is the case.
+         */
+        if((uint8_t*)metadata != &ctx.buf[0]){
+            memcpy(&ctx.buf[0], metadata, SLOT_MT_SIZE);
+        }
         if (metadata->icon_len != 0) {
             if((SLOT_MT_SIZE + metadata->icon_len) > ctx.buflen){
       	        errcode = MBED_ERROR_INVPARAM;
                 goto err;
             }
-            memcpy(&ctx.buf[0] + SLOT_MT_SIZE, &metadata->icon.icon_data[0], metadata->icon_len);
+            /* NOTE: because of tight SRAM constraints, metadata and internal
+             * buffer can be aliased! We do not copy stuff if this is the case.
+             */
+            if((uint8_t*)metadata != &ctx.buf[0]){
+                memcpy(&ctx.buf[0] + SLOT_MT_SIZE, &metadata->icon.icon_data[0], metadata->icon_len);
+            }
         }
+    }
+    else{
+        /* TODO: better size handling */
+        memset(&ctx.buf[0], 0, ctx.buflen); /* Write zeros to the slot is asked to remove */
     }
 
     printf("[XXX] writing buffer to SD\n");
@@ -665,8 +691,8 @@ mbed_error_t    fidostorage_set_appid_metadata(uint32_t  *slotid, fidostorage_ap
             if (shadow_bitmap[i] & (0x1 << j)){
                 if (curr_slotnum == ((8*i) + j)) {
                     /* Replace data */
-                    memcpy(&appid_table[j].appid[0], metadata->appid, 32);
-                    memcpy(&appid_table[j].kh[0], metadata->kh, 32);
+                    memcpy(&appid_table[j].appid[0], appid, 32);
+                    memcpy(&appid_table[j].kh[0], kh_hash, 32);
                     appid_table[j].slotid = curr_slotid;
                     memcpy(&appid_table[j].hmac, hmac_slot, sizeof(hmac_slot));
                     to_write = true;
@@ -700,7 +726,6 @@ mbed_error_t    fidostorage_set_appid_metadata(uint32_t  *slotid, fidostorage_ap
     printf("[fidostorage] took %d ms to update encrypted appid metadata in uSD\n", (uint32_t)(ms2-ms1));
 #endif
 
-
 err:
     return errcode;
 }
@@ -712,7 +737,7 @@ mbed_error_t    fidostorage_get_replay_counter(uint8_t replay_counter[8], bool c
 }
 
 
-mbed_error_t    fidostorage_set_replay_counter(const uint8_t replay_counter[8])
+mbed_error_t    fidostorage_set_replay_counter(const uint8_t replay_counter[8], const bool fetch_shadow_bitmap)
 {
     mbed_error_t errcode = MBED_ERROR_NONE;
     hmac_context hmac_ctx;
@@ -727,14 +752,12 @@ mbed_error_t    fidostorage_set_replay_counter(const uint8_t replay_counter[8])
 
     sys_get_systick(&ms1, PREC_MILLI);
 #endif
-    /* First, read our first header sector */
-    if ((errcode = read_encrypted_SD_crypto_sectors(&ctx.buf[0], SLOT_SIZE, 0)) != MBED_ERROR_NONE) {
-        log_printf("[fidostorage] Failed during SD_enc_read, from sector %d: ret=%d\n", 0, errcode);
-        errcode = MBED_ERROR_RDERROR;
-        goto err;
+    /* Do we have to fetch our shadow bitmap? */
+    if(fetch_shadow_bitmap == true){
+        if((errcode = fidostorage_fetch_shadow_bitmap()) != MBED_ERROR_NONE){
+            goto err;
+        }
     }
-    /* Copy our shadow bitmap */
-    memcpy(shadow_bitmap, &ctx.buf[0], sizeof(shadow_bitmap));
 
     /* Update the global anti-replay counter with the provided value */
     memcpy(&shadow_bitmap[1024], replay_counter, 8);
