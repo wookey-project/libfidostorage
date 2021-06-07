@@ -389,8 +389,8 @@ mbed_error_t    fidostorage_get_appid_slot(uint8_t const appid[32], uint8_t cons
                     }
                     slot_found = true;
                     if (check_header == false) {
-                        /* no header HMAC calculation, we can leave now */
-                        break;
+                        /* no header HMAC calculation, we can leave now that we have found our slot! */
+                        goto out;
                     }
                 }
 skip:
@@ -403,6 +403,7 @@ skip:
 next:
         curr_sector++;
     }
+out:
     if (check_header != false) {
         hmac_finalize(&hmac_ctx, &calculated_hmac[0], &hmac_len);
 
@@ -424,7 +425,7 @@ next:
 err:
 #if CONFIG_USR_LIB_FIDOSTORAGE_PERFS
     sys_get_systick(&ms2, PREC_MILLI);
-    printf("[fidostorage] took %d ms to get appid slot from encrypted header (%d bytes read from uSD)\n", (uint32_t)(ms2-ms1), active_slots*SECTOR_SIZE);
+    printf("[fidostorage] took %d ms to get appid slot from encrypted header (%d bytes read from uSD)\n", (uint32_t)(ms2-ms1), curr_sector*SECTOR_SIZE);
     printf("[fidostorage] %d loops executed, %d active slots\n", (curr_sector-1), active_slots);
 #endif
     return errcode;
@@ -453,7 +454,6 @@ mbed_error_t    fidostorage_get_appid_metadata(const uint8_t appid[32],
 
     sys_get_systick(&ms1, PREC_MILLI);
 #endif
-
     if ((errcode = read_encrypted_SD_crypto_sectors((uint8_t*)data_buffer, SLOT_SIZE, (SECTOR_SIZE * slotid) / SLOT_SIZE)) != MBED_ERROR_NONE) {
         log_printf("[fidostorage] Failed during SD_enc_read, from sector %d: ret=%d\n", (SECTOR_SIZE * slotid) / SLOT_SIZE, errcode);
         errcode = MBED_ERROR_RDERROR;
@@ -545,8 +545,8 @@ mbed_error_t    fidostorage_set_appid_metadata(uint32_t  *slotid, fidostorage_ap
     uint8_t appid[32] = { 0 };
     uint8_t kh_hash[32] = { 0 };
 
-    printf("%s: dumping metadata that will be set...\n", __func__);
-    fidostorage_dump_slot(metadata);
+    //printf("%s: dumping metadata that will be set...\n", __func__);
+    //fidostorage_dump_slot(metadata);
 
     if (!fidostorage_is_configured()) {
         errcode = MBED_ERROR_INVSTATE;
@@ -629,8 +629,8 @@ mbed_error_t    fidostorage_set_appid_metadata(uint32_t  *slotid, fidostorage_ap
         memcpy(appid, metadata->appid, 32);
         memcpy(kh_hash, metadata->kh, 32);
  
-        printf("%s[%d]: dumping metadata again before memcpy\n", __func__, __LINE__);
-        fidostorage_dump_slot(metadata);
+        //printf("%s[%d]: dumping metadata again before memcpy\n", __func__, __LINE__);
+        //fidostorage_dump_slot(metadata);
 
         /* NOTE: because of tight SRAM constraints, metadata and internal
          * buffer can be aliased! We do not copy stuff if this is the case.
@@ -656,11 +656,6 @@ mbed_error_t    fidostorage_set_appid_metadata(uint32_t  *slotid, fidostorage_ap
         memset(&ctx.buf[0], 0, ctx.buflen); /* Write zeros to the slot is asked to remove */
     }
 
-    printf("[XXX] writing buffer to SD\n");
-    printf("[XXX] buff appid is:\n");
-    hexdump(((fidostorage_appid_slot_t*)(&ctx.buf[0]))->appid, 32);
-    printf("[XXX] buffKH is:\n");
-    hexdump(((fidostorage_appid_slot_t*)(&ctx.buf[0]))->kh, 32);
     if ((errcode = write_encrypted_SD_crypto_sectors(&ctx.buf[0], ctx.buflen, (SECTOR_SIZE * curr_slotid) / SLOT_SIZE)) != MBED_ERROR_NONE) {
         log_printf("[fidostorage] Failed during SD_enc_write, from sector %d: ret=%d\n", (SECTOR_SIZE * curr_slotid) / SLOT_SIZE, errcode);
         errcode = MBED_ERROR_RDERROR;
