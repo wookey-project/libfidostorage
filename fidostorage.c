@@ -156,7 +156,7 @@ static inline mbed_error_t fidostorage_get_hmac_key_from_master(uint8_t *master,
     *keylen = 32;
 
 #ifdef CONFIG_USR_LIB_FIDOSTORAGE_DEBUG
-    printf("HMAC key is: ");
+    printf("HMAC key is:\n");
     hexdump(key_h, 32);
 #endif
 err:
@@ -170,6 +170,7 @@ static inline mbed_error_t fidostorage_get_aes_key_from_master(uint8_t *master, 
         errcode = MBED_ERROR_INVPARAM;
         goto err;
     }
+
     // K = SHA-256("ENCRYPTION"+K_M)
     const char *encryption = "ENCRYPTION";
     sha256_context sha256_ctx;
@@ -180,7 +181,7 @@ static inline mbed_error_t fidostorage_get_aes_key_from_master(uint8_t *master, 
     *keylen = 32;
 
 #ifdef CONFIG_USR_LIB_FIDOSTORAGE_DEBUG
-    log_printf("AES key is: ");
+    log_printf("AES key is:\n");
     hexdump(key_aes, 32);
 #endif
 err:
@@ -259,7 +260,6 @@ mbed_error_t    fidostorage_fetch_shadow_bitmap(void)
     /* First, read our first header sector */
     if ((errcode = read_encrypted_SD_crypto_sectors(&ctx.buf[0], SLOT_SIZE, 0)) != MBED_ERROR_NONE) {
         log_printf("[fidostorage] Failed during SD_enc_read (when fetching shadow bitmap), from sector %d: ret=%d\n", 0, errcode);
-        errcode = MBED_ERROR_RDERROR;
         goto err;
     }
     /* Copy our shadow bitmap */
@@ -365,7 +365,6 @@ mbed_error_t    fidostorage_get_appid_slot(uint8_t const appid[32], uint8_t cons
         }
         if ((errcode = read_encrypted_SD_crypto_sectors(&ctx.buf[0], ctx.buflen, curr_sector)) != MBED_ERROR_NONE) {
             log_printf("[fidostorage] Failed during SD_enc_read, from sector %d: ret=%d\n", curr_sector, errcode);
-            errcode = MBED_ERROR_RDERROR;
             goto err;
         }
         uint16_t numcell = 8; /* there are 8 cells per 4k read (512 bytes per cell) */
@@ -415,6 +414,8 @@ out:
 #endif
         if (memcmp(&header_hmac[0], &calculated_hmac[0], hmac_len) != 0) {
             log_printf("[logstorage] slot table integrity check failed !\n");
+            errcode = MBED_ERROR_INVSTATE;
+            goto err;
         }
     }
     if ((appid != NULL) && (slot_found != true)) {
@@ -456,7 +457,6 @@ mbed_error_t    fidostorage_get_appid_metadata(const uint8_t appid[32],
 #endif
     if ((errcode = read_encrypted_SD_crypto_sectors((uint8_t*)data_buffer, SLOT_SIZE, (SECTOR_SIZE * slotid) / SLOT_SIZE)) != MBED_ERROR_NONE) {
         log_printf("[fidostorage] Failed during SD_enc_read, from sector %d: ret=%d\n", (SECTOR_SIZE * slotid) / SLOT_SIZE, errcode);
-        errcode = MBED_ERROR_RDERROR;
         goto err;
     }
     mt = (fidostorage_appid_slot_t*)&data_buffer[0];
@@ -528,7 +528,7 @@ mbed_error_t    fidostorage_get_appid_metadata(const uint8_t appid[32],
     log_printf("[fidostorage] appid metadata valid !\n");
 err:
     if (mt) {
-    fidostorage_dump_slot(mt);
+        fidostorage_dump_slot(mt);
     }
 #if CONFIG_USR_LIB_FIDOSTORAGE_PERFS
     sys_get_systick(&ms2, PREC_MILLI);
@@ -579,7 +579,7 @@ mbed_error_t    fidostorage_set_appid_metadata(uint32_t  *slotid, fidostorage_ap
             hmac_update(&hmac_ctx, &metadata->icon.icon_data[0], metadata->icon_len);
         }
         hmac_len = sizeof(hmac_slot);
-         hmac_finalize(&hmac_ctx, &hmac_slot[0], &hmac_len);
+        hmac_finalize(&hmac_ctx, &hmac_slot[0], &hmac_len);
 #if CONFIG_USR_LIB_FIDOSTORAGE_DEBUG
         log_printf("Calculated HMAC of slot:\n");
         hexdump(hmac_slot, hmac_len);
@@ -628,7 +628,7 @@ mbed_error_t    fidostorage_set_appid_metadata(uint32_t  *slotid, fidostorage_ap
         }
         memcpy(appid, metadata->appid, 32);
         memcpy(kh_hash, metadata->kh, 32);
- 
+
         //printf("%s[%d]: dumping metadata again before memcpy\n", __func__, __LINE__);
         //fidostorage_dump_slot(metadata);
 
@@ -658,7 +658,6 @@ mbed_error_t    fidostorage_set_appid_metadata(uint32_t  *slotid, fidostorage_ap
 
     if ((errcode = write_encrypted_SD_crypto_sectors(&ctx.buf[0], ctx.buflen, (SECTOR_SIZE * curr_slotid) / SLOT_SIZE)) != MBED_ERROR_NONE) {
         log_printf("[fidostorage] Failed during SD_enc_write, from sector %d: ret=%d\n", (SECTOR_SIZE * curr_slotid) / SLOT_SIZE, errcode);
-        errcode = MBED_ERROR_RDERROR;
         goto err;
     }
 
@@ -675,7 +674,6 @@ mbed_error_t    fidostorage_set_appid_metadata(uint32_t  *slotid, fidostorage_ap
         /* Read our slot entry */
         if ((errcode = read_encrypted_SD_crypto_sectors(&ctx.buf[0], ctx.buflen, (i+1))) != MBED_ERROR_NONE) {
             log_printf("[fidostorage] Failed during SD_enc_read, from sector %d: ret=%d\n", i, errcode);
-            errcode = MBED_ERROR_RDERROR;
             goto err;
         }
         uint16_t numcell = 8; /* there are 8 cells per 4k read (512 bytes per cell) */
@@ -700,7 +698,6 @@ mbed_error_t    fidostorage_set_appid_metadata(uint32_t  *slotid, fidostorage_ap
             /* Write back our modified slot entry if necessary */
             if ((errcode = write_encrypted_SD_crypto_sectors(&ctx.buf[0], ctx.buflen, (i+1))) != MBED_ERROR_NONE) {
                 log_printf("[fidostorage] Failed during SD_enc_write, from sector %d: ret=%d\n", i, errcode);
-                errcode = MBED_ERROR_RDERROR;
                 goto err;
             }
         }
@@ -713,7 +710,6 @@ mbed_error_t    fidostorage_set_appid_metadata(uint32_t  *slotid, fidostorage_ap
     /* Now commit the shadow map and its hmac */
     if ((errcode = write_encrypted_SD_crypto_sectors(&ctx.buf[0], ctx.buflen, 0)) != MBED_ERROR_NONE) {
         log_printf("[fidostorage] Failed during SD_enc_write, from sector %d: ret=%d\n", 0, errcode);
-        errcode = MBED_ERROR_RDERROR;
         goto err;
     }
 #if CONFIG_USR_LIB_FIDOSTORAGE_PERFS
@@ -770,7 +766,6 @@ mbed_error_t    fidostorage_set_replay_counter(const uint8_t replay_counter[8], 
         /* Read our slot entry */
         if ((errcode = read_encrypted_SD_crypto_sectors(&ctx.buf[0], ctx.buflen, (i+1))) != MBED_ERROR_NONE) {
             log_printf("[fidostorage] Failed during SD_enc_read, from sector %d: ret=%d\n", i, errcode);
-            errcode = MBED_ERROR_RDERROR;
             goto err;
         }
         uint16_t numcell = 8; /* there are 8 cells per 4k read (512 bytes per cell) */
@@ -791,7 +786,6 @@ mbed_error_t    fidostorage_set_replay_counter(const uint8_t replay_counter[8], 
     /* Now commit the shadow map and its hmac */
     if ((errcode = write_encrypted_SD_crypto_sectors(&ctx.buf[0], ctx.buflen, 0)) != MBED_ERROR_NONE) {
         log_printf("[fidostorage] Failed during SD_enc_write, from sector %d: ret=%d\n", 0, errcode);
-        errcode = MBED_ERROR_RDERROR;
         goto err;
     }
 #if CONFIG_USR_LIB_FIDOSTORAGE_PERFS
